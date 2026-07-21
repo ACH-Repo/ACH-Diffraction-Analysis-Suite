@@ -18,6 +18,7 @@ from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 from matplotlib.transforms import blended_transform_factory
 
 from .. import config, identity
+from ..core import cif as cifcore
 
 
 CIF_LOC = r'D:\Workfolder\<you>\CIF_LOC'
@@ -627,75 +628,10 @@ def validate_order(order, n):
 # REFLECTION MARKERS (--reflections)
 # ==========================================
 
-def parse_reflections(spec):
-	"""Parse e.g. "(MyCIF,10,magenta),(Other.cif,5)" → [(name, n_top, color_or_None), ...]."""
-	if not spec:
-		return []
-	out = []
-	for inner in re.findall(r'\(([^()]*)\)', spec):
-		parts = [p.strip() for p in inner.split(',')]
-		# Drop trailing empty parts from "(name,N,)" trailing commas, but keep
-		# empties in the middle so positional meaning is preserved.
-		while parts and parts[-1] == '':
-			parts.pop()
-		if not parts:
-			continue
-		name = parts[0]
-		if not name:
-			print(f'[!] Skipping reflection spec "({inner})": missing CIF name.')
-			continue
-		n_top = SETTINGS['reflection_n_top']
-		if len(parts) > 1 and parts[1]:
-			try:
-				n_top = int(parts[1])
-				if n_top <= 0:
-					raise ValueError
-			except ValueError:
-				n_top = SETTINGS['reflection_n_top']
-				print(f'[!] Reflection spec "({inner})": N must be a positive integer; '
-				      f'using default {n_top}.')
-		color = parts[2] if len(parts) > 2 and parts[2] else None
-		out.append((name, n_top, color))
-	return out
 
 
-def resolve_reflection_cif(name):
-	"""Resolve a CIF name to an existing path.
-
-	Tries, in order: the literal string; the literal string + .cif; CIF_LOC/name;
-	CIF_LOC/name.cif. Returns the resolved path or None."""
-	name_cif = name if name.lower().endswith('.cif') else name + '.cif'
-	candidates = [name, name_cif,
-	              os.path.join(CIF_LOC, name),
-	              os.path.join(CIF_LOC, name_cif)]
-	for c in candidates:
-		if os.path.exists(c):
-			return c
-	return None
 
 
-def simulate_reflections(cif_path, n_top, two_theta_range):
-	"""Return the 2θ positions of the n_top strongest reflections from a CIF,
-	restricted to the given two_theta range. Sorted ascending in 2θ."""
-	try:
-		from pymatgen.core import Structure
-		from pymatgen.analysis.diffraction.xrd import XRDCalculator
-	except ImportError as e:
-		raise ImportError('Reflection markers need pymatgen installed.') from e
-
-	x_lo, x_hi = float(two_theta_range[0]), float(two_theta_range[1])
-	structure = Structure.from_file(cif_path)
-	calc = XRDCalculator(wavelength=SETTINGS['cif_wavelength'])
-	pattern = calc.get_pattern(structure,
-	                            two_theta_range=(max(x_lo, 1e-6), x_hi))
-	positions = np.asarray(pattern.x, dtype=float)
-	intensities = np.asarray(pattern.y, dtype=float)
-	if positions.size == 0:
-		return np.array([])
-	# Top N strongest, then sort ascending by 2θ.
-	order = np.argsort(-intensities)
-	top = positions[order][:n_top]
-	return np.sort(top)
 
 
 def draw_reflection_lines(ax, ref_sets):
@@ -1030,31 +966,14 @@ def main():
 	if OVERRIDES.get('reflections') is not None:
 		ref_specs = list(OVERRIDES['reflections'])
 	else:
-		ref_specs = parse_reflections(args.reflections)
-	ref_sets = []  # list of (display_label, positions_array, color)
-	default_ref_colors = SETTINGS['reflection_color_cycle']
-	for i, (name, n_top, color) in enumerate(ref_specs):
-		resolved = resolve_reflection_cif(name)
-		if resolved is None:
-			tried_loc = os.path.join(
-				CIF_LOC, name if name.lower().endswith('.cif') else name + '.cif')
-			print(f'[!] Reflection CIF not found: {name}  '
-			      f'(also tried {tried_loc!r})')
-			continue
-		try:
-			positions = simulate_reflections(
-				resolved, n_top, (global_x_lo, global_x_hi))
-		except Exception as e:
-			print(f'[!] Reflection simulation failed for {name}: {e}')
-			continue
-		if positions.size == 0:
-			print(f'[!] {name}: no reflections in 2-theta range '
-			      f'[{global_x_lo:.2f}, {global_x_hi:.2f}].')
-			continue
-		c = color or default_ref_colors[i % len(default_ref_colors)]
-		ref_sets.append((Path(resolved).stem, positions, c))
-		vprint(f'    + reflections from {resolved}: '
-		       f'{positions.size} lines, color={c}')
+		ref_specs = args.reflections
+	ref_sets = cifcore.collect_reflection_sets(
+		ref_specs,
+		(global_x_lo, global_x_hi),
+		palette=SETTINGS['reflection_color_cycle'],
+		cif_dir=CIF_LOC,
+		wavelength=SETTINGS['cif_wavelength'],
+		verbose_print=vprint)
 
 	draw_reflection_lines(ax, ref_sets)
 

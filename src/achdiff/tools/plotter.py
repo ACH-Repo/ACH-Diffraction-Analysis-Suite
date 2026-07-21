@@ -12,6 +12,8 @@ from matplotlib.ticker import AutoMinorLocator
 from matplotlib.transforms import blended_transform_factory
 
 from .. import config, identity
+from ..core.rounding import cryst_round, split_value_bracket
+from ..core import cif as cifcore
 
 # ==========================================
 # CONFIGURATION & SETTINGS (Static parameters)
@@ -445,71 +447,6 @@ def to_pastel(color, weight=settings['pastel_weight']):
 # CRYSTALLOGRAPHIC ROUNDING FUNCTION
 # ==========================================
 
-def cryst_round(mean_err):
-	getcontext().prec = 32
-
-	if mean_err is None:
-		return None
-
-	if '`_' in mean_err:
-		mean, error = mean_err.split('`_', 1)
-	elif '_' in mean_err:
-		mean, error = mean_err.split('_', 1)
-	else:
-		return mean_err
-
-	# TOPAS appends annotations after the numeric uncertainty (e.g. `_LIMIT_MAX_<v>`,
-	# `_LIMIT_MIN_<v>`, `_SVD_ERR`, and other diagnostic suffixes). Since both the
-	# mean and the uncertainty are always plain numbers, keep only the leading
-	# numeric prefix of each side and discard whatever trails behind.
-	_num = r'^\s*[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?'
-	mn = re.match(_num, mean)
-	en = re.match(_num, error)
-	if mn:
-		mean = mn.group(0)
-	if en:
-		error = en.group(0)
-
-	# Salvage on partial garbage: if only the uncertainty side is malformed,
-	# return the mean as a plain string (no `(esd)` annotation). If even the
-	# mean can't parse, give up cleanly so the caller skips this row.
-	try:
-		mean  = Decimal(mean)
-		error = Decimal(error)
-	except (InvalidOperation, ValueError):
-		try:
-			return str(Decimal(mean))
-		except (InvalidOperation, ValueError):
-			return None
-	
-	# "Rule of 19": the bracketed esd is an integer from 2 to 19 — i.e. one
-	# significant digit, or two when the leading digit is 1. An esd that would
-	# round to 20 or more is shortened by one digit, and the mean is rounded to
-	# the same decimal place: 15.4840(20) -> 15.484(2).
-	error = abs(error)
-	if error == 0:
-		return format(mean, 'f')
-
-	ndec = 1 - error.adjusted()  # decimal places that give the esd two significant digits
-	while True:
-		bracket = int(error.scaleb(ndec).to_integral_value(rounding=ROUND_HALF_UP))
-		if bracket > 19:
-			ndec -= 1
-		elif bracket < 2:
-			ndec += 1
-		else:
-			break
-
-	mean_round = mean.quantize(Decimal(1).scaleb(-ndec), rounding=ROUND_HALF_UP)
-
-	# Always render fixed-point — lattice parameters and cell volumes must never
-	# appear in scientific notation (Decimal's str() flips to it for large
-	# exponents). When the esd's significant digit sits left of the decimal
-	# point (ndec < 0), pad it back out so the bracket stays unambiguous:
-	# 6.6E+3 ± 7E+2 renders as 6600(700), not 6600(7).
-	if ndec < 0:
-		bracket *= 10 ** -ndec
-	return '%s(%s)' % (format(mean_round, 'f'), bracket)
 
 # ==========================================
 # FILE WRANGLING FUNCTIONS
@@ -810,108 +747,12 @@ def get_unit_cell_info(path):
 # CIF that is NOT in the fit, to check whether a leftover feature belongs to a
 # suspected impurity phase.
 
-def parse_reflections(spec):
-	"""Parse e.g. "(MyCIF,10,magenta),(Other.cif,5)" → [(name, n_top, color_or_None), ...]."""
-	if not spec:
-		return []
-	out = []
-	for inner in re.findall(r'\(([^()]*)\)', spec):
-		parts = [p.strip() for p in inner.split(',')]
-		# Drop trailing empty parts from "(name,N,)" trailing commas, but keep
-		# empties in the middle so positional meaning is preserved.
-		while parts and parts[-1] == '':
-			parts.pop()
-		if not parts:
-			continue
-		name = parts[0]
-		if not name:
-			print(f'[!] Skipping reflection spec "({inner})": missing CIF name.')
-			continue
-		n_top = settings['reflection_n_top']
-		if len(parts) > 1 and parts[1]:
-			try:
-				n_top = int(parts[1])
-				if n_top <= 0:
-					raise ValueError
-			except ValueError:
-				n_top = settings['reflection_n_top']
-				print(f'[!] Reflection spec "({inner})": N must be a positive integer; '
-				      f'using default {n_top}.')
-		color = parts[2] if len(parts) > 2 and parts[2] else None
-		out.append((name, n_top, color))
-	return out
 
 
-def resolve_reflection_cif(name):
-	"""Resolve a CIF name to an existing path.
-
-	Tries, in order: the literal string; the literal string + .cif; cif_dir_path/name;
-	cif_dir_path/name.cif. Returns the resolved path or None."""
-	cif_dir = settings['cif_dir_path']
-	name_cif = name if name.lower().endswith('.cif') else name + '.cif'
-	candidates = [name, name_cif,
-	              os.path.join(cif_dir, name),
-	              os.path.join(cif_dir, name_cif)]
-	for c in candidates:
-		if os.path.exists(c):
-			return c
-	return None
 
 
-def simulate_reflections(cif_path, n_top, two_theta_range):
-	"""Return the 2θ positions of the n_top strongest reflections from a CIF,
-	restricted to the given two_theta range. Sorted ascending in 2θ.
-
-	pymatgen is imported here rather than at module scope so the plotter keeps
-	working with only numpy and matplotlib installed when -r isn't used."""
-	try:
-		from pymatgen.core import Structure
-		from pymatgen.analysis.diffraction.xrd import XRDCalculator
-	except ImportError as e:
-		raise ImportError('Reflection markers need pymatgen installed.') from e
-
-	x_lo, x_hi = float(two_theta_range[0]), float(two_theta_range[1])
-	structure = Structure.from_file(cif_path)
-	calc = XRDCalculator(wavelength=settings['cif_wavelength'])
-	pattern = calc.get_pattern(structure, two_theta_range=(max(x_lo, 1e-6), x_hi))
-	positions = np.asarray(pattern.x, dtype=float)
-	intensities = np.asarray(pattern.y, dtype=float)
-	if positions.size == 0:
-		return np.array([])
-	# Top N strongest, then sort ascending by 2θ.
-	order = np.argsort(-intensities)
-	top = positions[order][:n_top]
-	return np.sort(top)
 
 
-def collect_reflection_sets(ax, spec):
-	"""Resolve, simulate and colour every -r set. Returns [(label, positions, color), ...],
-	skipping (with a message) any set that can't be resolved, simulated, or that has no
-	reflections inside the plotted 2θ range."""
-	ref_sets = []
-	if not spec:
-		return ref_sets
-	x_lo = float(ax.lines[1].get_xdata().min())
-	x_hi = float(ax.lines[1].get_xdata().max())
-	palette = settings['reflection_color_cycle']
-	for i, (name, n_top, color) in enumerate(parse_reflections(spec)):
-		resolved = resolve_reflection_cif(name)
-		if resolved is None:
-			tried = os.path.join(settings['cif_dir_path'],
-			                     name if name.lower().endswith('.cif') else name + '.cif')
-			print(f'[!] Reflection CIF not found: {name}  (also tried {tried!r})')
-			continue
-		try:
-			positions = simulate_reflections(resolved, n_top, (x_lo, x_hi))
-		except Exception as e:
-			print(f'[!] Reflection simulation failed for {name}: {e}')
-			continue
-		if positions.size == 0:
-			print(f'[!] {name}: no reflections in 2-theta range [{x_lo:.2f}, {x_hi:.2f}].')
-			continue
-		ref_sets.append((Path(resolved).stem, positions,
-		                 color or palette[i % len(palette)]))
-	return ref_sets
 
 
 def draw_reflection_lines(ax, ref_sets):
@@ -1577,7 +1418,14 @@ def main():
 		# process_multiplication reaches the difference curve as ax.lines[-1], so any
 		# axvline appended earlier would silently retarget it, and add_legend builds its
 		# entries from whatever is in ax.lines when it runs.
-		draw_reflection_lines(ax, collect_reflection_sets(ax, args.reflections))
+		if args.reflections:
+			draw_reflection_lines(ax, cifcore.collect_reflection_sets(
+				args.reflections,
+				(ax.lines[1].get_xdata().min(), ax.lines[1].get_xdata().max()),
+				palette=settings['reflection_color_cycle'],
+				cif_dir=settings['cif_dir_path'],
+				wavelength=settings['cif_wavelength'],
+				default_n_top=settings['reflection_n_top']))
 		add_legend(ax)
 
 		if settings['show_info']:

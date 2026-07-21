@@ -9,6 +9,7 @@ from bs4.element import Tag as Bs4Tag
 from decimal import Decimal, getcontext
 import copy
 import argparse
+from ..core.rounding import cryst_round
 
 
 # === EMBEDDED RESOURCE DATA — generated from resource.htm; regenerate with dump_resource.py ===
@@ -352,68 +353,6 @@ def load_embedded_space2cryst():
 
 
 
-def cryst_round(parm,mean_err):
-	'''
-	DESCRIPTION: This function preforms crystallographic rounding on a string that contains two floats 
-	separated by the substring "`_".
-	'''
-	
-	# set precision ridiculously high
-	getcontext().prec = 32
-
-	if '_' not in mean_err:
-		if re.search(r'\d+\.\d+',mean_err) and parm in ['chi','rwp','rexp']: 
-			return '{:.2f}'.format(Decimal(mean_err))
-		else:
-			return mean_err
-
-	if 'LIMIT_MAX' in mean_err or 'LIMIT_MIN' in mean_err:
-		return 
-	elif '`_' in mean_err:
-		mean, error = mean_err.split('`_')
-	elif '_' in mean_err:
-		mean, error = mean_err.split('_')
-	
-	mean  = Decimal(mean)
-	error = Decimal(error)
-	
-	# print('0. Initial values: {}, {}'.format(mean,error))
-	# transform mean and err into scientific
-	mean  = '{:.16e}'.format(mean)
-	error = '{:.16e}'.format(error)
-	
-	# get exponents of mean and error
-	ex_m = int(re.search(r'(?<=e)[+-]*\d*',mean).group()) 
-	ex_e = int(re.search(r'(?<=e)[+-]*\d*',error).group())
-	dex  = 1+ex_m-ex_e
-	
-	# cut off mean
-	mean_cut = '{:.{}}'.format(Decimal(mean),str(dex)+'e')
-	# print('1. Cut mean and round: {}'.format(Decimal(mean_cut)))
-	
-	# initial round of error
-	bracket = re.sub(r'e[+-]*\d*','',error)
-	bracket = '{:.1f}'.format(Decimal(bracket))
-	bracket = bracket.replace('.','')
-	# print('2. Initial cut and round of error: {}'.format(bracket))
-	
-	# set mean_round
-	mean_round = Decimal(mean_cut)
-	
-	# second round for digits higher 20
-	if int(bracket) > 20:
-		bracket = '0.'+bracket
-		bracket = '{:.1f}'.format(Decimal(bracket))
-		bracket = bracket[-1]
-		# print('3. Optional second cut and round of error: {}'.format(bracket))
-		
-		mean_round = str(Decimal(mean_cut))
-		mean_round = '{:.{}}'.format(Decimal(mean_round),dex)
-		# print('4. Second cut and round of mean, if 3. occurs: {}'.format(mean_round))
-	
-	# print('5. Final result put into html table: {}({})'.format(mean_round,bracket))
-	# print('\n')
-	return '%s(%s)'%(mean_round,bracket)
 
 
 
@@ -690,6 +629,15 @@ def find_angles(raw,data,crystal_system):
 
 
 ############ new code 
+def format_quality(parm, value):
+	"""Fit-quality factors (chi/rwp/rexp) carry no esd, so they get plain 2-decimal
+	formatting. This used to live inside cryst_round as a `parm` special case; it is
+	a presentation choice, so it belongs to this tool rather than to rounding."""
+	if re.search(r'\d+\.\d+', value) and parm in ['chi', 'rwp', 'rexp']:
+		return '{:.2f}'.format(Decimal(value))
+	return value
+
+
 def get_data(path,data):
 
 	'''Finds all the available data in a TOPAS output file.'''
@@ -766,7 +714,10 @@ def make_new_column(template,outsoup,params):
 		val = params[key]
 
 		if key in ['a','b','c','al','be','ga','volume','rwp','rexp','chi'] and key != 'Not found':
-			val = cryst_round(key,val)
+			if '_' in val:
+				val = cryst_round(val)
+			else:
+				val = format_quality(key, val)
 
 		new_td = copy.copy(td_template)
 
@@ -919,6 +870,13 @@ def prompt_output_filename(default='done.htm'):
 
 # Main Loop
 def main():
+	# get_data() and make_new_column() read these as module globals. They used to
+	# be assigned at module level, so wrapping this block in main() would make them
+	# locals and break the lookups. (make_new_column also takes `data` as its
+	# `params` argument but reads the global in one branch -- preserved as-is
+	# rather than corrected, to keep this move behaviour-neutral.)
+	global space2cryst, data
+
 	input_files = select_files_wizard('.')
 	if not input_files:
 		raise SystemExit('No files selected — exiting.')
