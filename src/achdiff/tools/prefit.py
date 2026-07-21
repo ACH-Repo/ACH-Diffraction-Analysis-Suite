@@ -49,6 +49,8 @@ try:
 except ImportError:
 	find_peaks = None
 
+from .. import config, identity
+
 
 # Hardcoded fallback. Overridden by the CIF_LOC environment variable or the
 # --cif-loc CLI flag if either is set.
@@ -1007,12 +1009,24 @@ def main():
 	                 help='X-ray wavelength in Å (default: Cu Kα = 1.5406).')
 	ap.add_argument('-v', '--verbose', action='store_true',
 	                 help='Print resolution diagnostics for inputs.')
+	identity.add_user_argument(ap)
 	args = ap.parse_args()
 
 	global VERBOSE, CIF_LOC
 	VERBOSE = bool(args.verbose)
-	if args.cif_loc:
-		CIF_LOC = args.cif_loc
+	# --cif-loc still wins, but the fallback chain is now the shared one
+	# (env var > saved profile > [defaults]) instead of env-var-or-hardcoded.
+	user, source = identity.resolve(args.user)
+	if args.user or user:
+		print(identity.describe(user, source))
+	CIF_LOC = config.get('cif_loc', cli_value=args.cif_loc, user=user)
+
+	if args.save_profile:
+		if not args.user:
+			print('[!] --save-profile needs -u ID to say which profile to write.')
+		else:
+			path = config.save_profile(args.user, {'cif_loc': CIF_LOC})
+			print(f'[+] Saved profile {args.user} to {path}')
 	vprint(f'[v] cwd        = {os.getcwd()}')
 	vprint(f'[v] CIF_LOC    = {CIF_LOC!r}  '
 	       f'({"exists" if os.path.isdir(CIF_LOC) else "MISSING"})')

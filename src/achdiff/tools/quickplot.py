@@ -17,6 +17,8 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 from matplotlib.transforms import blended_transform_factory
 
+from .. import config, identity
+
 
 CIF_LOC = r'D:\Workfolder\<you>\CIF_LOC'
 script_name = pathlib.Path(__file__).name
@@ -179,6 +181,10 @@ parser.add_argument('--order', default=None, type=str,
                     help='Reorder the stack top-to-bottom by input index. The i-th value '
                          'is the input index drawn at position i. e.g. "0,2,1,3" keeps '
                          'input 0 on top, then draws inputs 2, 1, 3 below it.')
+parser.add_argument('--cif-loc', dest='cif_loc', default=None,
+                    help='CIF library directory for -r. Overrides the CIF_LOC env '
+                         'var and any saved profile.')
+identity.add_user_argument(parser)
 args = parser.parse_args()
 
 
@@ -770,6 +776,21 @@ def _apply_overrides_to_args():
 
 def main():
 	_apply_overrides_to_args()
+
+	# Resolve the person, then their CIF library. Announced rather than silent so a
+	# wrong profile can't quietly point -r at someone else's structures.
+	global CIF_LOC
+	user, source = identity.resolve(args.user)
+	if args.user or user:
+		print(identity.describe(user, source))
+	CIF_LOC = config.get('cif_loc', cli_value=args.cif_loc, user=user)
+
+	if args.save_profile:
+		if not args.user:
+			print('[!] --save-profile needs -u ID to say which profile to write.')
+		else:
+			path = config.save_profile(args.user, {'cif_loc': CIF_LOC})
+			print(f'[+] Saved profile {args.user} to {path}')
 
 	# OVERRIDES['inputs'] (if set) replaces both -i and the cwd glob.
 	if OVERRIDES.get('inputs'):

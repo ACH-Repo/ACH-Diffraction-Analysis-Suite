@@ -11,6 +11,8 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import AutoMinorLocator
 from matplotlib.transforms import blended_transform_factory
 
+from .. import config, identity
+
 # ==========================================
 # CONFIGURATION & SETTINGS (Static parameters)
 # ==========================================
@@ -135,6 +137,10 @@ def _build_parser():
 	                         'resolve against cif_dir_path. Useful for checking an impurity '
 	                         'phase that is not part of the fit. Needs pymatgen.'
 	                         % settings['reflection_n_top'])
+	parser.add_argument('--cif-loc', dest='cif_loc', default=None,
+	                    help='CIF library directory for -r. Overrides the CIF_LOC env '
+	                         'var and any saved profile.')
+	identity.add_user_argument(parser)
 	return parser
 
 
@@ -1421,6 +1427,26 @@ def main():
 	args = _build_parser().parse_known_args()[0]
 	settings['extension'] = args.extension.lstrip('.').lower()
 
+	# Resolve the person, then their settings. Announced rather than silent: a
+	# wrong profile means a wrong CIF library, and that should never be invisible.
+	user, source = identity.resolve(args.user)
+	if args.user or user:
+		print(identity.describe(user, source))
+	settings['cif_dir_path'] = config.get('cif_loc', cli_value=args.cif_loc, user=user)
+	# store_true can't distinguish "absent" from "off", so only an explicit --qall
+	# overrides the profile; without it the saved preference decides.
+	qall = True if args.qall else bool(config.get('qall', user=user))
+
+	if args.save_profile:
+		if not args.user:
+			print('[!] --save-profile needs -u ID to say which profile to write.')
+		else:
+			saved = {'cif_loc': settings['cif_dir_path']}
+			if args.qall:
+				saved['qall'] = True
+			path = config.save_profile(args.user, saved)
+			print(f'[+] Saved profile {args.user} to {path}')
+
 	file_dicts = get_file_dicts()
 	all_out_files = glob('*.out')
 
@@ -1555,7 +1581,7 @@ def main():
 		add_legend(ax)
 
 		if settings['show_info']:
-			add_quality(ax, outfile_info, show_all=args.qall)
+			add_quality(ax, outfile_info, show_all=qall)
 		if args.cell_info:
 			add_unit_cell_boxes(ax, ordered_phases, ordered_box_colors)
 		style(ax)

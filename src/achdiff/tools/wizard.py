@@ -9,6 +9,7 @@ Author: <author>
 
 import os
 import re
+import argparse
 import warnings
 import zipfile
 import subprocess
@@ -16,6 +17,8 @@ from glob import glob
 from pathlib import Path
 from datetime import datetime, timezone
 from string import Template
+
+from .. import config, identity
 
 # Clear the screen helper to keep the interactive wizard clean
 def clear_terminal():
@@ -360,13 +363,38 @@ def parse_brml_instrument(brml_path: str) -> tuple:
 # WIZARD INTERACTIVE CONSOLE FLOW
 # ==========================================
 
+def _build_parser():
+	parser = argparse.ArgumentParser(
+		description='Interactive wizard generating TOPAS Pawley .inp files.')
+	parser.add_argument('--cif-loc', dest='cif_loc', default=None,
+	                    help='CIF library directory. Overrides the CIF_LOC env var '
+	                         'and any saved profile.')
+	identity.add_user_argument(parser)
+	return parser
+
+
 def main():
+	args = _build_parser().parse_known_args()[0]
+
 	clear_terminal()
 	print("====================================================")
 	print("      Welcome to the TOPAS Input File Wizard        ")
 	print("====================================================")
 	print("This tool will guide you step-by-step to generate a ")
 	print("specialized .inp template for structureless Pawley fits.\n")
+
+	# Resolve the person and their CIF library before Step 2 needs it.
+	user, source = identity.resolve(args.user)
+	if args.user or user:
+		print(identity.describe(user, source))
+	SETTINGS['cif_dir_path'] = config.get('cif_loc', cli_value=args.cif_loc, user=user)
+
+	if args.save_profile:
+		if not args.user:
+			print('[!] --save-profile needs -u ID to say which profile to write.')
+		else:
+			path = config.save_profile(args.user, {'cif_loc': SETTINGS['cif_dir_path']})
+			print(f'[+] Saved profile {args.user} to {path}')
 
 	# Step 1: Locate Experimental Data File
 	exp_files = glob('*.xy') + glob('*.raw') + glob('*.brml')
