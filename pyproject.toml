@@ -9,6 +9,22 @@ description = "PXRD and TOPAS analysis tools: Pawley fit setup, prefitting, plot
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
+keywords = ["pxrd", "xrd", "topas", "pawley", "rietveld", "crystallography", "diffraction"]
+
+classifiers = [
+    # 0.x: interfaces may still change between releases.
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Console",
+]
 
 # pymatgen is needed by four of the five tools, so it is not an optional extra.
 # scipy (prefit) and beautifulsoup4 (tables) are single-tool dependencies, but
@@ -23,6 +39,13 @@ dependencies = [
     "beautifulsoup4",
     "platformdirs",
 ]
+
+# Sub-tables must follow every plain key of [project]; a table opened above
+# `dependencies` would capture it as project.urls.dependencies instead.
+[project.urls]
+Homepage = "https://github.com/ACH-Repo/ACH-Diffraction-Analysis-Suite"
+Repository = "https://github.com/ACH-Repo/ACH-Diffraction-Analysis-Suite"
+Issues = "https://github.com/ACH-Repo/ACH-Diffraction-Analysis-Suite/issues"
 
 [project.scripts]
 # Note: `pf` moved from tables to prefit in 0.2.0, and tables became `pt`.

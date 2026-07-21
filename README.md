@@ -5,7 +5,7 @@ prefitting, publication plotting, quick pattern comparison, and lattice-paramete
 tables. Five commands, one install.
 
 ```bash
-pip install git+https://github.com/ACH-Repo/ACH-Diffraction-Analysis-Suite.git
+pip install ach-diffraction-suite
 ```
 
 | Command | Tool | What it does |
@@ -27,7 +27,7 @@ If you prefer different names, see [Custom command names](#custom-command-names)
 ## Updating
 
 ```bash
-pip install --upgrade git+https://github.com/ACH-Repo/ACH-Diffraction-Analysis-Suite.git
+pip install --upgrade ach-diffraction-suite
 ```
 
 One command updates all five tools. Your configuration is **not** touched: it
@@ -191,8 +191,10 @@ shipped with the package rather than a blob compiled into the source. To use
 your own:
 
 ```bash
-pt --resource "D:\path	o\youresource.htm"
-set ACH_RESOURCE_HTM=D:\path	o\youresource.htm    # or set it once
+pt --resource "D:\path	o\your
+esource.htm"
+set ACH_RESOURCE_HTM=D:\path	o\your
+esource.htm    # or set it once
 ```
 
 Parsing 900 KB of HTML takes about 1.4 s, so the derived data is cached after
@@ -213,6 +215,8 @@ cd ACH-Diffraction-Analysis-Suite
 pip install -e .
 python tests/test_config_identity.py
 ```
+
+Publishing a new version: see [RELEASING.md](RELEASING.md).
 
 ## Layout
 
