@@ -38,3 +38,7 @@ achdiff = "achdiff.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# resource.htm is a real data file, not an embedded blob -- it must ship in the wheel.
+[tool.setuptools.package-data]
+achdiff = ["data/*.htm"]

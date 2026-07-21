@@ -186,6 +186,20 @@ overlay as `pp`.
 Interactive selection of `.out` files, producing an HTML table of refined cell
 parameters with crystallographic rounding.
 
+The table template and space-group lookup come from `resource.htm`, a real file
+shipped with the package rather than a blob compiled into the source. To use
+your own:
+
+```bash
+pt --resource "D:\path	o\youresource.htm"
+set ACH_RESOURCE_HTM=D:\path	o\youresource.htm    # or set it once
+```
+
+Parsing 900 KB of HTML takes about 1.4 s, so the derived data is cached after
+the first run (~19 ms thereafter). The cache key is a hash of the file's
+contents, so editing `resource.htm` invalidates it automatically — there is no
+regeneration step to forget. `ACH_CACHE_DIR` relocates the cache.
+
 ## Requirements
 
 Python ≥ 3.10. Dependencies install automatically: numpy, matplotlib, pymatgen,
