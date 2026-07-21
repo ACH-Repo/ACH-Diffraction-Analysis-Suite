@@ -130,6 +130,15 @@ def get(key, cli_value=None, user=None, cfg=None):
 	return BUILTIN_DEFAULTS.get(key)
 
 
+def _fmt_toml_key(key):
+	"""A TOML table key. Bare keys allow only [A-Za-z0-9_-], which covers phase
+	names like ZIF-4 and H2pPDA; anything else gets quoted."""
+	key = str(key)
+	if key and all(c.isalnum() or c in '_-' for c in key):
+		return key
+	return '"' + key.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
 def _fmt_toml_value(value):
 	if isinstance(value, bool):
 		return 'true' if value else 'false'
@@ -140,6 +149,62 @@ def _fmt_toml_value(value):
 	return "'" + str(value).replace("'", "''") + "'"
 
 
+def trusted_params(user, cfg=None):
+	"""Trusted starting cell parameters for `user`: {phase_name: {param: value}}.
+
+	Deliberately **not** layered over a shared default set. A trusted parameter is
+	an empirical result from one person's sample on one instrument, so inheriting
+	somebody else's would silently seed a refinement with a cell that was never
+	measured on your material. Without a profile you get none, which is the
+	correct answer rather than a gap to fill in.
+	"""
+	if not user:
+		return {}
+	cfg = load() if cfg is None else cfg
+	table = profiles(cfg).get(user, {}).get('trusted', {})
+	return table if isinstance(table, dict) else {}
+
+
+def save_trusted(user, phase, params, meta=None):
+	"""Record `params` for `phase` under `user`, replacing any previous entry.
+
+	Replacing rather than merging is deliberate: a cell is refined as a set, and
+	mixing `a` from one fit with `c` from another produces a cell that was never
+	actually observed.
+	"""
+	cfg = load()
+	prof = cfg.setdefault('profiles', {}).setdefault(user, {})
+	entry = dict(params)
+	if meta:
+		entry.update(meta)
+	prof.setdefault('trusted', {})[phase] = entry
+	return write(cfg)
+
+
+def remove_trusted(user, phase):
+	"""Drop one phase from `user`'s trusted set. Returns True if it existed."""
+	cfg = load()
+	table = cfg.get('profiles', {}).get(user, {}).get('trusted', {})
+	if phase not in table:
+		return False
+	del table[phase]
+	write(cfg)
+	return True
+
+
+def _is_readable(path):
+	"""True if the file parses as TOML. Used to tell "no config yet" apart from
+	"config we must not clobber"."""
+	if tomllib is None:
+		return False
+	try:
+		with open(path, 'rb') as fh:
+			tomllib.load(fh)
+		return True
+	except Exception:
+		return False
+
+
 def write(cfg):
 	"""Serialise the whole config back to disk. Returns the path written.
 
@@ -148,6 +213,25 @@ def write(cfg):
 	not preserved -- an accepted trade for not depending on a round-tripping TOML
 	writer, and the file is machine-managed anyway.
 	"""
+	# A save must never quietly destroy a config it could not read. load() returns
+	# {} for an unparseable file, so writing straight over it would drop every
+	# profile the user had -- the exact moment their data matters most. Move the
+	# broken file aside first; the rewrite then starts from a known-empty state
+	# and the original is still recoverable by hand.
+	path = config_path()
+	if path.exists() and not _is_readable(path):
+		import datetime
+		stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+		salvage = path.with_suffix(f'.toml.corrupt-{stamp}')
+		try:
+			path.replace(salvage)
+			print(f'[!] {path.name} could not be parsed; kept a copy at {salvage.name} '
+			      f'before rewriting.')
+		except OSError as e:
+			print(f'[!] {path.name} is unreadable and could not be moved aside ({e}). '
+			      f'Refusing to overwrite it.')
+			return path
+
 	lines = ['# ACH Diffraction Analysis Suite configuration.',
 	         '# Managed by the tools; safe to hand-edit.',
 	         '# Precedence: CLI flag > env var > [profiles.<ID>] > [defaults] > built-in.',
@@ -169,12 +253,23 @@ def write(cfg):
 		lines.append('')
 
 	for pid in sorted(cfg.get('profiles', {})):
+		prof = cfg['profiles'][pid]
+		# Scalars first: a sub-table opened above them would swallow the rest of
+		# the profile's plain keys into itself.
+		scalars = {k: v for k, v in prof.items() if not isinstance(v, dict)}
 		lines.append(f'[profiles.{pid}]')
-		for k, v in sorted(cfg['profiles'][pid].items()):
+		for k, v in sorted(scalars.items()):
 			lines.append(f'{k} = {_fmt_toml_value(v)}')
 		lines.append('')
 
-	path = config_path()
+		trusted = prof.get('trusted', {})
+		if trusted:
+			for phase in sorted(trusted):
+				lines.append(f'[profiles.{pid}.trusted.{_fmt_toml_key(phase)}]')
+				for k, v in sorted(trusted[phase].items()):
+					lines.append(f'{k} = {_fmt_toml_value(v)}')
+				lines.append('')
+
 	path.parent.mkdir(parents=True, exist_ok=True)
 	path.write_text('\n'.join(lines), encoding='utf-8')
 	return path

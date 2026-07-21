@@ -112,6 +112,63 @@ Path(config.config_path()).write_text('this is not valid toml {{{', encoding='ut
 check('broken config degrades to built-ins, no exception',
       config.get('cif_loc'), config.BUILTIN_DEFAULTS['cif_loc'])
 
+
+
+# ---------- trusted parameters (per person, never shared) ----------
+from achdiff.core import topas  # noqa: E402
+
+check('no profile -> no trusted params', config.trusted_params(None), {})
+check('unknown profile -> no trusted params', config.trusted_params('ZZ'), {})
+
+config.save_trusted('CN', 'ZIF-4', {'a': "15.47`_0.001", 'b': "15.51`_0.001", 'c': "18.07`_0.001"},
+                    {'source': 'fit.out', 'registered': '2026-07-21'})
+config.save_trusted('AB', 'ZIF-4', {'a': "15.50`_0.002", 'b': "15.55`_0.002", 'c': "18.00`_0.002"})
+
+check('same phase, different people, different values',
+      (config.trusted_params('CN')['ZIF-4']['a'], config.trusted_params('AB')['ZIF-4']['a']),
+      ("15.47`_0.001", "15.50`_0.002"))
+check("one person's set never leaks into another's",
+      set(config.trusted_params('AB')), {'ZIF-4'})
+
+config.save_trusted('CN', 'H2adp', {'a': "7.38`_0.003", 'be': "110.5`_0.008"})
+check('a second phase is added, not replacing the first',
+      sorted(config.trusted_params('CN')), ['H2adp', 'ZIF-4'])
+
+check('provenance is stored alongside the cell',
+      config.trusted_params('CN')['ZIF-4']['source'], 'fit.out')
+
+check('remove drops only the named phase', config.remove_trusted('CN', 'H2adp'), True)
+check('...leaving the rest', sorted(config.trusted_params('CN')), ['ZIF-4'])
+check('removing what is not there is reported', config.remove_trusted('CN', 'nope'), False)
+
+# re-saving a phase replaces it wholesale: a cell is refined as a set, so mixing
+# `a` from one fit with `c` from another would describe a cell never observed.
+config.save_trusted('CN', 'ZIF-4', {'a': "99.9`_0.1"})
+check('re-save replaces rather than merges',
+      sorted(config.trusted_params('CN')['ZIF-4']), ['a'])
+
+# hyphenated phase names must survive the TOML round-trip
+config.save_trusted('CN', 'ZIF-zni', {'a': "23.45`_0.003", 'c': "12.45`_0.004"})
+check('hyphenated phase name round-trips',
+      config.trusted_params('CN')['ZIF-zni']['c'], "12.45`_0.004")
+# The corruption test above deliberately broke the file. A save after that must
+# not silently discard everything it could not read.
+check('a corrupt config is moved aside, not overwritten in place',
+      any(p.name.startswith('config.toml.corrupt-')
+          for p in Path(config.config_dir()).glob('*')), True)
+
+# ---------- harvesting from a .out ----------
+check('TOPAS diagnostic suffixes are stripped for reuse as input',
+      topas.clean_value("15.496374`_0.001842_SVD_ERR"), "15.496374`_0.001842")
+check('LIMIT annotations too',
+      topas.clean_value("7.38`_0.002`_LIMIT_MAX_9"), "7.38`_0.002")
+check('a plain value is untouched', topas.clean_value("15.4"), "15.4")
+check('symmetry-implied params are dropped from a harvested set',
+      sorted(topas.free_params('Tetragonal', {'a': '1', 'b': '1', 'c': '2'})), ['a', 'c'])
+check('unknown system keeps everything',
+      sorted(topas.free_params(None, {'a': '1', 'b': '1'})), ['a', 'b'])
+
+
 print()
 print(f'{len(fails)} failure(s)' + (': ' + ', '.join(fails) if fails else ''))
 sys.exit(1 if fails else 0)

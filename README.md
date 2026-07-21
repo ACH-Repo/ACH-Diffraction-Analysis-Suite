@@ -135,6 +135,42 @@ setting decides the default, the flag decides the invocation.
 Set `ACH_CONFIG_DIR` to relocate the whole config (useful for a portable install
 or for testing against a throwaway config).
 
+## Trusted starting parameters
+
+A Pawley refinement converges much better when it starts from a cell close to
+the truth. Once a fit has converged, register its cell so the wizard seeds the
+next one with it:
+
+```bash
+achdiff trusted add ZIF-4 --from CN-sample_pawley_01.out -u CN
+achdiff trusted list -u CN
+```
+
+The values are read straight out of the `.out`, uncertainties and all, so
+nothing is retyped. For a multi-phase fit the command lists the phases and asks
+which one with `--phase-index`. `achdiff trusted set` takes values by hand when
+the `.out` is long gone.
+
+From then on `rp` applies them automatically and says where each came from:
+
+```
+[*] Trusted parameters for ZIF-4 (a, b, c from CN-sample_pawley_01.out)
+```
+
+**Trusted parameters are per person and are never shared implicitly.** Yours are
+a refined result for *your* sample on *your* instrument; inheriting a
+colleague's would silently seed a refinement with a cell that was never measured
+on your material. Two people can register the same phase name with different
+values and neither affects the other. Nothing ships with the package, so a new
+user starts with an empty set rather than someone else's numbers.
+
+Sharing is possible, but only as a deliberate act:
+
+```bash
+achdiff trusted export -u CN -o cn.toml     # hand the file to a colleague
+achdiff trusted import cn.toml -u AB        # refuses to clobber without --force
+```
+
 ## The tools
 
 ### `rp` — Pawley input wizard

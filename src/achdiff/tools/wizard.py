@@ -48,45 +48,12 @@ SETTINGS = {
 		'siemens_5005': "\n    LP_Factor(!th2_monochromator, 26.6)\n    CuKa2(0.0001)\n    Specimen_Displacement(height,-0.04784`_0.00142)",
 		'd08': "\n    LP_Factor(!th2_monochromator, 0)\n    CuKa2_analyt(0.0001)\n    Specimen_Displacement(height,0)"
 	},
-	# Trusted starting cell parameters from previous well-converged fits.
-	# These override CIF values when use_trusted_params is True (the default).
-	# Only supply the parameters relevant to the crystal system; all others
-	# remain as read from the CIF. Values may include TOPAS backtick-sigma
-	# notation (e.g. 23.45`_0.003) to seed the refinement uncertainty estimate.
+	# Trusted starting cell parameters are per person and live in the user's
+	# config (achdiff trusted add/list), not here. They are one person's refined
+	# result for one sample on one instrument, so shipping a set with the package
+	# would seed everyone's refinements with a cell measured on somebody else's
+	# material.
 	'use_trusted_params': True,
-	'trusted_params': {
-		'ZIF-zni': {
-			'a': '23.450081`_0.003374',
-			'c': '12.457945`_0.004831',
-		},
-		'ZIF-4': {
-			'a': '15.484356`_0.000738',
-			'b': '15.511304`_0.000704',
-			'c': '18.103277`_0.000892',
-		},
-		'ZIF-62': {
-			'a': '15.495146`_0.002522',
-			'b': '15.547521`_0.002173',
-			'c': '17.927694`_0.002978',
-		},
-		'H2adp': {
-			'a': '7.386179`_0.002941',
-			'b': '5.236263`_0.002965',
-			'c': '9.944893`_0.004057',
-			'be': '110.52250`_0.00791' 
-		},
-		'H2pPDA': {
-			'a': '10.360238`_0.002127',
-			'b': '4.807089`_0.000728',
-			'c': '10.353990`_0.002195',
-			'be': '116.93473`_0.01202' 
-		},
-		'HpPyBz': {
-			'a': '10.838163`_0.010591',
-			'b': '11.790409`_0.009458',
-			'c': '14.843892`_0.012730'
-		},
-	}
 }
 
 # Python Template objects make text insertion safe and clear
@@ -122,6 +89,10 @@ Out_X_Yobs("${out_name}${sep}X_Yobs.txt")
 Out_X_Ycalc("${out_name}${sep}Out_X_Ycalc.txt")
 Out_X_Difference("${out_name}${sep}X_Difference.txt")
 ''')
+
+# Cell parameters a trusted entry may carry. Anything else in the entry is
+# provenance metadata (source, registered) and must never reach a macro call.
+_CELL_KEYS = ('a', 'b', 'c', 'al', 'be', 'ga')
 
 CRYSTAL_MACROS = {
 	'triclinic': 'Triclinic(@ $a, @ $b, @ $c, @ $al, @ $be, @ $ga)',
@@ -438,14 +409,30 @@ def main():
 		print("[-] Verification Error: One or more phase names were misspelled or missing. Try again.")
 
 	# Apply trusted starting parameters when available and the toggle is on
+	# Trusted parameters come from the running person's profile and nowhere else.
+	# They are an empirical result from one person's sample on one instrument, so
+	# inheriting a colleague's would seed the refinement with a cell that was
+	# never measured on this material.
 	trusted_phases_applied = []
 	if SETTINGS.get('use_trusted_params'):
+		trusted = config.trusted_params(user)
 		for i, name in enumerate(user_input_phases):
-			if name in SETTINGS['trusted_params']:
-				selected_phase_data[i] = {**selected_phase_data[i], **SETTINGS['trusted_params'][name]}
-				trusted_phases_applied.append(name)
-		if trusted_phases_applied:
-			print(f"  [*] Trusted starting parameters applied for: {', '.join(trusted_phases_applied)}")
+			entry = trusted.get(name)
+			if not entry:
+				continue
+			# Only cell parameters are merged; `source` / `registered` are
+			# provenance metadata and must not reach the macro call.
+			cell = {k: v for k, v in entry.items() if k in _CELL_KEYS}
+			if not cell:
+				continue
+			selected_phase_data[i] = {**selected_phase_data[i], **cell}
+			trusted_phases_applied.append(name)
+			origin = entry.get('source')
+			print(f"  [*] Trusted parameters for {name} "
+			      f"({', '.join(sorted(cell))}{' from ' + origin if origin else ''})")
+		if not trusted_phases_applied and trusted:
+			print(f"  [*] No trusted parameters matched. {user} has: "
+			      f"{', '.join(sorted(trusted))}")
 
 	# Step 3: Device Configuration Selection
 	# If a BRML file was selected, try to auto-detect settings from it first.

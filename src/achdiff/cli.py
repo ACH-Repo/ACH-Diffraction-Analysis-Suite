@@ -202,6 +202,192 @@ def cmd_alias_sync(args):
 	return 0
 
 
+PARAM_KEYS = ('a', 'b', 'c', 'al', 'be', 'ga')
+
+
+def _require_user(args):
+	"""Trusted sets are per person, so a command touching one must know whose.
+	Falls back to the usual inference, but never guesses silently."""
+	from . import identity
+	user, source = identity.resolve(getattr(args, 'user', None))
+	if not user:
+		print('[!] No profile selected, and trusted parameters are always per person.')
+		print('    Pass -u ID, set ACH_USER, or run from a directory of your own samples.')
+		return None
+	if source != 'command line':
+		print(identity.describe(user, source))
+	return user
+
+
+def cmd_trusted_list(args):
+	user = _require_user(args)
+	if not user:
+		return 1
+	table = config.trusted_params(user)
+	if not table:
+		print(f'No trusted parameters registered for {user}.')
+		print('  achdiff trusted add <phase> --from <fit>.out')
+		return 0
+	print(f'Trusted starting parameters for {user}:')
+	for phase in sorted(table):
+		entry = table[phase]
+		cells = {k: v for k, v in entry.items() if k in PARAM_KEYS}
+		print(f'  {phase}')
+		for k in PARAM_KEYS:
+			if k in cells:
+				print(f'      {k:3} = {cells[k]}')
+		src, when = entry.get('source'), entry.get('registered')
+		if src or when:
+			print(f'      from {src or "?"}{"  on " + when if when else ""}')
+	return 0
+
+
+def cmd_trusted_add(args):
+	"""Harvest a phase's refined cell out of a .out file."""
+	from .core import topas
+
+	user = _require_user(args)
+	if not user:
+		return 1
+
+	phases = topas.parse_phases(args.source)
+	if not phases:
+		print(f'[!] No cell parameters found in {args.source}. '
+		      f'Is it a TOPAS .out from a completed refinement?')
+		return 1
+
+	if len(phases) > 1 and args.phase_index is None:
+		print(f'{args.source} contains {len(phases)} phases:')
+		for i, ph in enumerate(phases, 1):
+			free = topas.free_params(ph['system'], ph['params'])
+			desc = ', '.join(f'{k}={topas.clean_value(v)}' for k, v in free.items())
+			print(f'  [{i}] {ph["system"] or "?"}  sg={ph["space_group"] or "?"}  {desc}')
+		print('Re-run with --phase-index N to say which one to register.')
+		return 1
+
+	idx = (args.phase_index or 1) - 1
+	if not 0 <= idx < len(phases):
+		print(f'[!] --phase-index {args.phase_index} is out of range (1..{len(phases)}).')
+		return 1
+
+	ph = phases[idx]
+	free = topas.free_params(ph['system'], ph['params'])
+	params = {k: topas.clean_value(v) for k, v in free.items()}
+	if not params:
+		print(f'[!] Phase {idx + 1} of {args.source} declares no cell parameters.')
+		return 1
+
+	import datetime
+	meta = {'source': os.path.basename(args.source),
+	        'registered': datetime.date.today().isoformat()}
+	path = config.save_trusted(user, args.phase, params, meta)
+	print(f'[+] {args.phase} registered for {user}:')
+	for k, v in params.items():
+		print(f'      {k:3} = {v}')
+	print(f'    -> {path}')
+	return 0
+
+
+def cmd_trusted_set(args):
+	"""Enter values by hand, for a fit whose .out is long gone."""
+	user = _require_user(args)
+	if not user:
+		return 1
+	params = {}
+	for item in args.assignments:
+		if '=' not in item:
+			print(f'[!] Expected key=value, got {item!r}.')
+			return 1
+		k, v = item.split('=', 1)
+		k = k.strip()
+		if k not in PARAM_KEYS:
+			print(f'[!] Unknown parameter {k!r}. Use one of: {", ".join(PARAM_KEYS)}')
+			return 1
+		params[k] = v.strip()
+	if not params:
+		print('[!] Give at least one parameter, e.g. a=15.484356`_0.000738')
+		return 1
+	import datetime
+	path = config.save_trusted(user, args.phase, params,
+	                           {'source': 'manual entry',
+	                            'registered': datetime.date.today().isoformat()})
+	print(f'[+] {args.phase} registered for {user} -> {path}')
+	return 0
+
+
+def cmd_trusted_remove(args):
+	user = _require_user(args)
+	if not user:
+		return 1
+	if config.remove_trusted(user, args.phase):
+		print(f'[+] Removed {args.phase} from {user}.')
+		return 0
+	print(f'[!] {user} has no trusted entry for {args.phase!r}.')
+	return 1
+
+
+def cmd_trusted_export(args):
+	"""Write a shareable TOML file. Handing a colleague your starting cells is a
+	normal thing to want; it stays an explicit act rather than shared storage."""
+	user = _require_user(args)
+	if not user:
+		return 1
+	table = config.trusted_params(user)
+	if not table:
+		print(f'Nothing to export: {user} has no trusted parameters.')
+		return 1
+	lines = [f'# Trusted starting cell parameters exported from profile {user}.',
+	         f'# Import with: achdiff trusted import <file> -u <your-id>', '']
+	for phase in sorted(table):
+		lines.append(f'[{config._fmt_toml_key(phase)}]')
+		for k, v in sorted(table[phase].items()):
+			lines.append(f'{k} = {config._fmt_toml_value(v)}')
+		lines.append('')
+	text = '\n'.join(lines)
+	if args.output:
+		Path(args.output).write_text(text, encoding='utf-8')
+		print(f'[+] Exported {len(table)} phase(s) to {args.output}')
+	else:
+		print(text)
+	return 0
+
+
+def cmd_trusted_import(args):
+	user = _require_user(args)
+	if not user:
+		return 1
+	path = Path(args.file)
+	if not path.is_file():
+		print(f'[!] No such file: {path}')
+		return 1
+	if config.tomllib is None:
+		print('[!] No TOML parser available (Python < 3.11 needs `pip install tomli`).')
+		return 1
+	try:
+		with open(path, 'rb') as fh:
+			data = config.tomllib.load(fh)
+	except Exception as e:
+		print(f'[!] Could not parse {path}: {e}')
+		return 1
+
+	incoming = {k: v for k, v in data.items() if isinstance(v, dict)}
+	if not incoming:
+		print(f'[!] {path} has no phase tables. Expected e.g. [ZIF-4] with a/b/c keys.')
+		return 1
+
+	existing = config.trusted_params(user)
+	clashes = sorted(set(incoming) & set(existing))
+	if clashes and not args.force:
+		print(f'[!] Already registered for {user}: {", ".join(clashes)}')
+		print('    Re-run with --force to overwrite, or remove them first.')
+		return 1
+
+	for phase, params in sorted(incoming.items()):
+		config.save_trusted(user, phase, params)
+	print(f'[+] Imported {len(incoming)} phase(s) into {user}: {", ".join(sorted(incoming))}')
+	return 0
+
+
 def cmd_profile_list(args):
 	cfg = config.load()
 	ids = config.profile_ids(cfg)
@@ -262,6 +448,50 @@ def _build_parser():
 
 	a_sync = alias_sub.add_parser('sync', help='Recreate aliases after a reinstall.')
 	a_sync.set_defaults(func=cmd_alias_sync)
+
+	tr = sub.add_parser('trusted', help='Your trusted starting cell parameters.')
+	tr_sub = tr.add_subparsers(dest='action', required=True)
+
+	def _with_user(p):
+		"""-u goes on each leaf, not the `trusted` parser: attached to the parent it
+		would have to precede the subcommand (`trusted -u CN add ...`), which is not
+		where anyone types it."""
+		p.add_argument('-u', '--user', default=None, metavar='ID',
+		               help='Whose set to act on. Defaults to ACH_USER, else the '
+		                    'sample-name prefix of files here.')
+		return p
+
+	t_ls = _with_user(tr_sub.add_parser('list', help='Show your registered phases.'))
+	t_ls.set_defaults(func=cmd_trusted_list)
+
+	t_add = _with_user(tr_sub.add_parser('add', help='Harvest a refined cell from a .out file.'))
+	t_add.add_argument('phase', help='Phase name, matching the CIF stem the wizard will look up.')
+	t_add.add_argument('--from', dest='source', required=True, metavar='OUT',
+	                   help='A TOPAS .out from a converged refinement.')
+	t_add.add_argument('--phase-index', type=int, default=None, metavar='N',
+	                   help='Which phase in a multi-phase .out (1-based).')
+	t_add.set_defaults(func=cmd_trusted_add)
+
+	t_set = _with_user(tr_sub.add_parser('set', help='Enter parameters by hand.'))
+	t_set.add_argument('phase')
+	t_set.add_argument('assignments', nargs='+', metavar='KEY=VALUE',
+	                   help="e.g. a=15.484356`_0.000738 b=15.511304`_0.000704")
+	t_set.set_defaults(func=cmd_trusted_set)
+
+	t_rm = _with_user(tr_sub.add_parser('remove', help='Forget a phase.'))
+	t_rm.add_argument('phase')
+	t_rm.set_defaults(func=cmd_trusted_remove)
+
+	t_ex = _with_user(tr_sub.add_parser('export', help='Write a shareable TOML file.'))
+	t_ex.add_argument('-o', '--output', default=None, metavar='FILE',
+	                  help='Write here instead of printing to the terminal.')
+	t_ex.set_defaults(func=cmd_trusted_export)
+
+	t_im = _with_user(tr_sub.add_parser('import', help='Load a set exported by a colleague.'))
+	t_im.add_argument('file')
+	t_im.add_argument('--force', action='store_true',
+	                  help='Overwrite phases you already have registered.')
+	t_im.set_defaults(func=cmd_trusted_import)
 
 	prof = sub.add_parser('profile', help='Inspect saved per-person profiles.')
 	prof_sub = prof.add_subparsers(dest='action', required=True)
