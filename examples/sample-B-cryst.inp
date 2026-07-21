@@ -1,0 +1,53 @@
+' USER COMMENT:
+
+' DEFAULT COMMENT:
+'Selected phases: "ZIF-4" (61)
+'Selected device: "d08"
+'Selected outfile name: ""
+'
+
+'--------------------------------------------------------------
+'Input File for structureless profile fitting (Pawley).
+'Created using python for <group> @ TU-Dortmund.
+'Script name: run_pawley.py
+'Rundate: 11/05/2026 12:45:12 W. Europe Summer Time
+'Script author <author>
+'--------------------------------------------------------------
+
+'Fit-Quality Parameters: (No need to provide sensible initial values) 
+r_wp  0  r_exp  0  r_p  0  r_wp_dash  0  r_p_dash  0  r_exp_dash  0  weighted_Durbin_Watson  0  gof  0
+
+
+'Fit-Settings: max-iterations, convergence criteria, etc.
+iters 10000
+chi2_convergence_criteria 0.000001
+do_errors
+
+
+'Load experimental data to be fitted.
+xdd sample-B-cryst.brml
+	x_calculation_step = Yobs_dx_at(Xo); convolution_step 4
+
+	'Add Diffractometer settings
+
+	bkg @  0 0 0 0 0 0 
+	LP_Factor(!th2_monochromator, 0)
+	CuKa2_analyt(0.0001)
+	Specimen_Displacement(height,0)
+
+
+
+	hkl_Is
+		TCHZ_Peak_Type(@ u1, 0.01, @ v1, 0.01, @ w1,0.01,,0, @ x1,0.01,,0)
+		Simple_Axial_Model(axial1, 3)
+		Orthorhombic(@ 15.4231, @ 15.4042, @ 18.4379)
+		space_group "61"
+
+		cell_volume  4380.49
+
+
+Create_2Th_Ip_file("sample-B-cryst_pawley_01_2Th_Ip_61.txt")
+
+Out_X_Yobs("sample-B-cryst_pawley_01_X_Yobs.txt")
+Out_X_Ycalc("sample-B-cryst_pawley_01_Out_X_Ycalc.txt")
+Out_X_Difference("sample-B-cryst_pawley_01_X_Difference.txt")

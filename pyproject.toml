@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ach-diffraction-suite"
+version = "0.1.0"
+description = "PXRD and TOPAS analysis tools: Pawley fit setup, prefitting, plotting, and lattice-parameter tables."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+
+# pymatgen is needed by four of the five tools, so it is not an optional extra.
+# scipy (prefit) and beautifulsoup4 (tables) are single-tool dependencies, but
+# splitting them into extras would mean a user who runs `pf` after installing
+# without extras gets an ImportError instead of a working tool. For a five-tool
+# lab suite the simpler contract is: one install, everything works.
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "pymatgen",
+    "scipy",
+    "beautifulsoup4",
+    "platformdirs",
+]
+
+[project.scripts]
+# Names match the .cmd shims these replace, so nothing changes for existing users.
+pp  = "achdiff.tools.plotter:main"
+rp  = "achdiff.tools.wizard:main"
+pxp = "achdiff.tools.quickplot:main"
+ppf = "achdiff.tools.prefit:main"
+pf  = "achdiff.tools.tables:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

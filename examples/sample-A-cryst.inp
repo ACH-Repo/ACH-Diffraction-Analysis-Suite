@@ -1,0 +1,58 @@
+' ENGINE SYSTEM AUTOMATION LOG: 
+' Selected phases: "ZIF-4" (61) | "ZIF-zni" (110) 
+' Selected device: "d08" 
+' Selected background: "silicon" 
+'-------------------------------------------------------------- 
+'Input File for structureless profile fitting (Pawley). 
+'Created using python for <group> @ TU-Dortmund. 
+'Script name: run_pawley.py 
+'Rundate: 18/05/2026 12:25:42 W. Europe Summer Time 
+'Script author <author> 
+'-------------------------------------------------------------- 
+ 
+'Fit-Quality Parameters: (No need to provide sensible initial values)  
+r_wp  2.89086077 r_exp  2.21794742 r_p  2.14936875 r_wp_dash  3.86125752 r_p_dash  3.06501593 r_exp_dash  2.96246234 weighted_Durbin_Watson  1.49001878 gof  1.30339464
+ 
+ 
+'Fit-Settings: max-iterations, convergence criteria, etc. 
+iters 10000 
+chi2_convergence_criteria 0.000001 
+do_errors 
+ 
+ 
+'Load experimental data to be fitted. 
+xdd sample-A-cryst.brml 
+	x_calculation_step = Yobs_dx_at(Xo); convolution_step 4 
+ 
+'Add Diffractometer settings 
+    bkg @  563.213632`_46471.4211 -407.842423`_82862.4295  123.877896`_58619.1112  106.788863`_34957.1522  178.131439`_30140.3728 -51.942185`_40411.3458  165.237817`_47140.1753 -129.086175`_44626.6056  62.9272654`_41528.992 -15.0829244`_53412.0359 -10.8439818`_72978.3127 -0.200513116`_86020.9425  47.5347518`_86506.2717 -87.5222706`_74733.6246 -3.83559952`_55181.3619 -6.05805345`_34203.5808  36.5864686`_17226.53  30.0371632`_6664.22703 -6.96121883`_1778.67318 -51.7230246`_250.697702 
+ 
+    LP_Factor(!th2_monochromator, 0) 
+    CuKa2_analyt(0.0001) 
+    Specimen_Displacement(height,-0.0782183276`_0.00105465318) 
+ 
+	hkl_Is 
+		TCHZ_Peak_Type(@ u1,-0.0126897742`_0.0487380193, @ v1,-0.00901086996`_0.0120121171, @ w1, 0.00467517891`_0.000734321645, , 0, @ x1, 0.584413506`_0.00441492617, , 0) 
+		Simple_Axial_Model(axial1, 5.66989087`_0.021394736) 
+		Orthorhombic(@  15.455737`_0.001007, @  15.503351`_0.000887, @  18.054495`_0.001180) 
+		space_group "61"
+ 
+		cell_volume  4326.141`_0.470
+ 
+ 
+	Create_2Th_Ip_file("sample-A-cryst_pawley_01_2Th_Ip_61.txt") 
+ 
+	hkl_Is 
+		TCHZ_Peak_Type(@ u2, 1.39296634`_0.576121077_LIMIT_MIN_1.19296634, @ v2,-0.473498426`_0.149285878, @ w2, 0.0493409296`_0.00962652641, , 0, @ x2, 0.994515632`_0.0222212998_LIMIT_MAX_1.09451563, , 0) 
+		Simple_Axial_Model(axial2, 3.87006608`_0.416140293) 
+		Tetragonal(@  23.531144`_0.003433, @  12.450491`_0.002563) 
+		space_group "110"
+ 
+		cell_volume  6894.020`_2.462
+ 
+ 
+	Create_2Th_Ip_file("sample-A-cryst_pawley_01_2Th_Ip_110.txt") 
+ 
+Out_X_Yobs("sample-A-cryst_pawley_01_X_Yobs.txt") 
+Out_X_Ycalc("sample-A-cryst_pawley_01_Out_X_Ycalc.txt") 
+Out_X_Difference("sample-A-cryst_pawley_01_X_Difference.txt")
