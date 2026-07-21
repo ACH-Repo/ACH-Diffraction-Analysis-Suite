@@ -271,6 +271,13 @@ repositories — two `cryst_round` implementations disagreed on refinement-limit
 annotations, and the reflection parser had a fix in one copy but not the other.
 Shared code lives in exactly one place now.
 
+## Credit
+
+Written by Christian Nelle in the group of Prof. Sebastian Henke, Fakultät für
+Chemie und Chemische Biologie, Technische Universität Dortmund.
+
+Released under the MIT licence — see [LICENSE](LICENSE).
+
 ## History
 
 Consolidates five previously separate repositories: `ACH-Pawley-Plotter`,

@@ -9,6 +9,11 @@ description = "PXRD and TOPAS analysis tools: Pawley fit setup, prefitting, plot
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
+# Name only. `authors` attributes the work; the affiliation belongs in LICENSE
+# (where it already is) and the README, and there is no PyPI field for it.
+# No email: PyPI author addresses are scraped, and project.urls.Issues below
+# already gives people a way to make contact.
+authors = [{ name = "Christian Nelle" }]
 keywords = ["pxrd", "xrd", "topas", "pawley", "rietveld", "crystallography", "diffraction"]
 
 classifiers = [
