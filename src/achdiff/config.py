@@ -25,7 +25,7 @@ from pathlib import Path
 
 if sys.version_info >= (3, 11):
 	import tomllib
-else:  # 3.10 has no tomllib; tomli is the same API and a pymatgen dependency already
+else:  # 3.10 has no tomllib; tomli is the same API and a declared dependency
 	try:
 		import tomli as tomllib
 	except ImportError:
@@ -77,8 +77,13 @@ def load():
 	if not path.exists():
 		return {}
 	if tomllib is None:
-		print(f'[!] Cannot read {path}: no TOML parser available '
-		      f'(Python < 3.11 needs `pip install tomli`). Using defaults.')
+		# Should be unreachable: tomli is a declared dependency below 3.11. If it
+		# is somehow missing, say so in terms of the consequence -- the tools keep
+		# working but every saved setting is invisible, which is far more confusing
+		# than an error.
+		print(f'[!] No TOML parser available, so {path} cannot be read: your '
+		      f'profiles, aliases and trusted parameters are being ignored.')
+		print(f'    Fix with: pip install tomli')
 		return {}
 	try:
 		with open(path, 'rb') as fh:

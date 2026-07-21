@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ach-diffraction-suite"
-version = "0.2.0"
+version = "0.2.1"
 description = "PXRD and TOPAS analysis tools: Pawley fit setup, prefitting, plotting, and lattice-parameter tables."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,6 +43,12 @@ dependencies = [
     "scipy",
     "beautifulsoup4",
     "platformdirs",
+    # tomllib is stdlib only from 3.11. Without this, config.py finds no TOML
+    # parser on 3.10 and every profile, alias and trusted set silently reads as
+    # empty -- the tools still run, just with none of the user's settings. It
+    # went unnoticed because build/pytest/pipx happen to install tomli on a
+    # development machine, and a lab user has none of those.
+    'tomli >= 1.1.0 ; python_version < "3.11"',
 ]
 
 # Sub-tables must follow every plain key of [project]; a table opened above
