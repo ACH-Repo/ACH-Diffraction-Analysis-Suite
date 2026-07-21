@@ -19,6 +19,7 @@ from matplotlib.transforms import blended_transform_factory
 
 from .. import config, identity
 from ..core import cif as cifcore
+from ..progname import prog_name
 
 
 CIF_LOC = r'D:\Workfolder\<you>\CIF_LOC'
@@ -105,7 +106,7 @@ DEFAULTS = {
 # When this script is copied into a project directory to serve as a custom
 # plot recipe, edit the values below instead of passing CLI flags. Anything
 # set to a non-None value overrides BOTH the CLI argument and the default —
-# so `pxp` (no flags) reproduces your customisation.
+# so `pq` (no flags) reproduces your customisation.
 #
 # Leave entries as None / empty to fall back to the normal CLI behaviour.
 
@@ -148,7 +149,7 @@ OVERRIDES = {
 
 info = '''This script automates the plotting of PXRD data files.'''
 
-parser = argparse.ArgumentParser(description=info)
+parser = argparse.ArgumentParser(prog=prog_name('pq'), description=info)
 parser.add_argument('-i', '--input', nargs='+', default=DEFAULTS['input'],
                     help='One or more data files to plot. If omitted, all readable files in cwd are collected.')
 parser.add_argument('-x', '--extension', default=DEFAULTS['extension'],

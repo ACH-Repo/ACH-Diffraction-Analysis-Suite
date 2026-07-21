@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from string import Template
 
 from .. import config, identity
+from ..progname import prog_name
 
 # Clear the screen helper to keep the interactive wizard clean
 def clear_terminal():
@@ -365,6 +366,7 @@ def parse_brml_instrument(brml_path: str) -> tuple:
 
 def _build_parser():
 	parser = argparse.ArgumentParser(
+		prog=prog_name('rp'),
 		description='Interactive wizard generating TOPAS Pawley .inp files.')
 	parser.add_argument('--cif-loc', dest='cif_loc', default=None,
 	                    help='CIF library directory. Overrides the CIF_LOC env var '

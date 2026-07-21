@@ -12,6 +12,7 @@ from matplotlib.ticker import AutoMinorLocator
 from matplotlib.transforms import blended_transform_factory
 
 from .. import config, identity
+from ..progname import prog_name
 from ..core.rounding import cryst_round, split_value_bracket
 from ..core import cif as cifcore
 
@@ -122,7 +123,9 @@ defaults = {
 }
 
 def _build_parser():
-	parser = argparse.ArgumentParser(description='Plots the result of a TOPAS Pawley fit using output files.')
+	parser = argparse.ArgumentParser(
+		prog=prog_name('pp'),
+		description='Plots the result of a TOPAS Pawley fit using output files.')
 	parser.add_argument('-i', '--input', type=str, nargs='+', default=defaults['input'])
 	parser.add_argument('-s', '--silent', action='store_true', default=defaults['silent'])
 	parser.add_argument('-c', '--cell_info', action='store_true', help='Include unit cell parameter boxes on the plot.')

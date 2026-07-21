@@ -11,15 +11,18 @@ pip install git+https://github.com/ACH-Repo/ACH-Diffraction-Analysis-Suite.git
 | Command | Tool | What it does |
 |---|---|---|
 | `rp` | wizard | Interactive wizard generating TOPAS Pawley `.inp` files from CIFs |
-| `ppf` | prefit | GUI cell-parameter tuning before a fit (sliders per crystal system) |
+| `pf` | prefit | GUI cell-parameter tuning before a fit (sliders per crystal system) |
 | `pp` | plotter | Publication plots of a finished Pawley fit |
-| `pxp` | quickplot | Quick stacked comparison of raw patterns |
-| `pf` | tables | HTML lattice-parameter tables from a batch of `.out` files |
+| `pq` | quickplot | Quick stacked comparison of raw patterns |
+| `pt` | tables | HTML lattice-parameter tables from a batch of `.out` files |
+| `achdiff` | — | Manage profiles, config and your own command aliases |
 
-The command names are unchanged from the standalone scripts, so existing habits
-and any documentation referring to `rp`, `pp`, `pxp`, `ppf` or `pf` still apply.
 The hand-written `.cmd` shims are no longer needed — pip puts real executables on
 `PATH`. Delete the old shims to avoid them shadowing the installed commands.
+
+**Changed in 0.2.0:** prefit moved from `ppf` to `pf`, tables from `pf` to `pt`,
+and quickplot from `pxp` to `pq`. Note that `pf` now runs prefit, not tables.
+If you prefer different names, see [Custom command names](#custom-command-names).
 
 ## Updating
 
@@ -30,6 +33,34 @@ pip install --upgrade git+https://github.com/ACH-Repo/ACH-Diffraction-Analysis-S
 One command updates all five tools. Your configuration is **not** touched: it
 lives in the user config directory, outside the installed package, so an upgrade
 structurally cannot overwrite it.
+
+## Custom command names
+
+The five commands above are pip *entry points*: pip writes real executables into
+the environment's Scripts directory when the package is installed. Nothing in a
+config file can rename them afterwards, because your shell needs an actual file
+on `PATH` to find.
+
+A shorthand you choose therefore has to be an additional file, which `achdiff`
+creates for you:
+
+```bash
+achdiff alias set plot plotter      # now `plot` runs the plotter
+achdiff alias set tbl tables
+achdiff alias list                  # built-ins plus your own
+achdiff alias remove plot
+```
+
+Tool names for the second argument: `plotter`, `wizard`, `prefit`, `tables`,
+`quickplot`.
+
+Aliases are recorded in your config, so they survive upgrades. A reinstall can
+clear the Scripts directory though — `achdiff alias sync` recreates them all.
+`achdiff alias list` marks any that have gone missing.
+
+Everyone on a shared machine writes to the same Scripts directory, so aliases
+are shared too. Pick names that won't confuse a colleague, and note that
+`achdiff` refuses to overwrite a built-in command or any file it did not create.
 
 ## Your CIF library, and per-person settings
 
@@ -74,7 +105,7 @@ where it came from are always printed.
 CLI flag  >  environment variable  >  [profiles.<ID>]  >  [defaults]  >  built-in
 ```
 
-`CIF_LOC` still works as an environment variable, as it always has for `ppf` —
+`CIF_LOC` still works as an environment variable, as it always has for prefit —
 and now the other four tools honour it too.
 
 ```bash
@@ -118,7 +149,7 @@ presets, and a zeroed polynomial with a coefficient count you type in.
 `.brml` inputs auto-detect anode, monochromator, goniometer radius and Soller
 angles, deriving a `Full_Axial_Model` line.
 
-### `ppf` — prefit
+### `pf` — prefit
 
 Loads CIF phases plus an experimental pattern and gives you sliders — restricted
 to the parameters the detected crystal system allows — to line simulated peaks up
@@ -140,17 +171,17 @@ reflections from phases that are *not* in the fit — the Bragg tick rows come
 from TOPAS's own `2Th_Ip` files, so this is the complementary check for whether
 an unexplained feature belongs to a suspected impurity.
 
-### `pxp` — quickplot
+### `pq` — quickplot
 
 ```bash
-pxp -i a.xy b.xy --stack            # stacked comparison
-pxp -i *.brml -s -x png             # save without a window
+pq -i a.xy b.xy --stack             # stacked comparison
+pq -i *.brml -s -x png              # save without a window
 ```
 
 Reads `.xy`, `.raw`, `.brml`, `.dat`, PDF-card XML exports. Same `-r` reflection
 overlay as `pp`.
 
-### `pf` — lattice-parameter tables
+### `pt` — lattice-parameter tables
 
 Interactive selection of `.out` files, producing an HTML table of refined cell
 parameters with crystallographic rounding.

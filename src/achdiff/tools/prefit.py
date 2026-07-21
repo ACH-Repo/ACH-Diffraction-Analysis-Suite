@@ -1,4 +1,4 @@
-"""ppf - interactive cell-parameter tuning for Pawley fit setup.
+"""Interactive cell-parameter tuning for Pawley fit setup.
 
 Loads one or more CIF phases plus an experimental PXRD pattern, and lets you
 slide the cell parameters of each phase until the simulated peaks line up with
@@ -50,6 +50,7 @@ except ImportError:
 	find_peaks = None
 
 from .. import config, identity
+from ..progname import prog_name
 
 
 # Hardcoded fallback. Overridden by the CIF_LOC environment variable or the
@@ -997,7 +998,7 @@ def main():
 		except Exception:
 			pass
 
-	ap = argparse.ArgumentParser(description=__doc__,
+	ap = argparse.ArgumentParser(prog=prog_name('pf'), description=__doc__,
 	                              formatter_class=argparse.RawDescriptionHelpFormatter)
 	ap.add_argument('-e', '--exp', help='Path to the experimental data file.')
 	ap.add_argument('-c', '--cif', nargs='+',

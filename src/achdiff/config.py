@@ -140,18 +140,14 @@ def _fmt_toml_value(value):
 	return "'" + str(value).replace("'", "''") + "'"
 
 
-def save_profile(user, settings):
-	"""Create or update [profiles.<user>] with `settings`, preserving everything
-	else in the file. Returns the path written.
+def write(cfg):
+	"""Serialise the whole config back to disk. Returns the path written.
 
 	The file is rewritten from a parsed copy rather than appended to, so repeated
 	saves don't accumulate duplicate tables. Comments in the existing file are
 	not preserved -- an accepted trade for not depending on a round-tripping TOML
 	writer, and the file is machine-managed anyway.
 	"""
-	cfg = load()
-	cfg.setdefault('profiles', {}).setdefault(user, {}).update(settings)
-
 	lines = ['# ACH Diffraction Analysis Suite configuration.',
 	         '# Managed by the tools; safe to hand-edit.',
 	         '# Precedence: CLI flag > env var > [profiles.<ID>] > [defaults] > built-in.',
@@ -161,6 +157,14 @@ def save_profile(user, settings):
 	if defaults:
 		lines.append('[defaults]')
 		for k, v in sorted(defaults.items()):
+			lines.append(f'{k} = {_fmt_toml_value(v)}')
+		lines.append('')
+
+	aliases = cfg.get('aliases', {})
+	if aliases:
+		lines.append('# User-defined command shorthands, created by `achdiff alias set`.')
+		lines.append('[aliases]')
+		for k, v in sorted(aliases.items()):
 			lines.append(f'{k} = {_fmt_toml_value(v)}')
 		lines.append('')
 
@@ -174,3 +178,11 @@ def save_profile(user, settings):
 	path.parent.mkdir(parents=True, exist_ok=True)
 	path.write_text('\n'.join(lines), encoding='utf-8')
 	return path
+
+
+def save_profile(user, settings):
+	"""Create or update [profiles.<user>] with `settings`, preserving everything
+	else in the file. Returns the path written."""
+	cfg = load()
+	cfg.setdefault('profiles', {}).setdefault(user, {}).update(settings)
+	return write(cfg)
