@@ -1,4 +1,4 @@
-"""pawley_prefit.py - interactive cell-parameter tuning for Pawley fit setup.
+"""ppf - interactive cell-parameter tuning for Pawley fit setup.
 
 Loads one or more CIF phases plus an experimental PXRD pattern, and lets you
 slide the cell parameters of each phase until the simulated peaks line up with

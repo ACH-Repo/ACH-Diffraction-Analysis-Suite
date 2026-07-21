@@ -105,7 +105,7 @@ DEFAULTS = {
 # When this script is copied into a project directory to serve as a custom
 # plot recipe, edit the values below instead of passing CLI flags. Anything
 # set to a non-None value overrides BOTH the CLI argument and the default —
-# so `python pxrd_quickplot.py` (no flags) reproduces your customisation.
+# so `pxp` (no flags) reproduces your customisation.
 #
 # Leave entries as None / empty to fall back to the normal CLI behaviour.
 

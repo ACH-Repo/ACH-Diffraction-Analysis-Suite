@@ -35,7 +35,7 @@ APP_NAME = 'ach-diffraction'
 CONFIG_FILENAME = 'config.toml'
 
 # Settings the suite manages, mapped to the environment variable that overrides
-# them. CIF_LOC keeps its historic name: pawley_prefit.py has always honoured it
+# them. CIF_LOC keeps its historic name: the prefit tool has always honoured it
 # and people's existing shells already set it.
 ENV_OVERRIDES = {
 	'cif_loc': 'CIF_LOC',

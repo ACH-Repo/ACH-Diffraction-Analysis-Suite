@@ -67,12 +67,12 @@ check('most common registered prefix wins',
       identity.infer_from_filenames(d3, known=['CN', 'AB']), 'CN')
 
 # ---------- config precedence ----------
-config.save_profile('CN', {'cif_loc': r'D:\Nelle\CIF', 'qall': True})
-config.save_profile('AB', {'cif_loc': r'D:\Bauer\CIF'})
+config.save_profile('CN', {'cif_loc': r'D:\PersonOne\CIF', 'qall': True})
+config.save_profile('AB', {'cif_loc': r'D:\PersonTwo\CIF'})
 check('roster lists registered ids', config.profile_ids(), ['AB', 'CN'])
 
-check('profile value used', config.get('cif_loc', user='CN'), r'D:\Nelle\CIF')
-check('other profile is separate', config.get('cif_loc', user='AB'), r'D:\Bauer\CIF')
+check('profile value used', config.get('cif_loc', user='CN'), r'D:\PersonOne\CIF')
+check('other profile is separate', config.get('cif_loc', user='AB'), r'D:\PersonTwo\CIF')
 check('no profile -> built-in default',
       config.get('cif_loc', user=None), config.BUILTIN_DEFAULTS['cif_loc'])
 check('CLI beats profile',
@@ -91,10 +91,10 @@ check('unset bool falls back', config.get('qall', user='AB'), False)
 before = Path(config.config_path()).read_text(encoding='utf-8')
 check('config lives outside site-packages',
       'site-packages' not in str(config.config_path()), True)
-config.save_profile('CN', {'cif_loc': r'D:\Nelle\CIF2'})
+config.save_profile('CN', {'cif_loc': r'D:\PersonOne\CIF2'})
 check('update preserves the other profile',
-      config.get('cif_loc', user='AB'), r'D:\Bauer\CIF')
-check('update applies', config.get('cif_loc', user='CN'), r'D:\Nelle\CIF2')
+      config.get('cif_loc', user='AB'), r'D:\PersonTwo\CIF')
+check('update applies', config.get('cif_loc', user='CN'), r'D:\PersonOne\CIF2')
 check('no duplicate profile tables after re-save',
       Path(config.config_path()).read_text(encoding='utf-8').count('[profiles.CN]'), 1)
 

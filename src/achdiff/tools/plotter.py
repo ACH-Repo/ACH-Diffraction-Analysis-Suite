@@ -84,7 +84,7 @@ settings = {
 	# Hues deliberately disjoint from every trace colour above — X_Yobs 'k',
 	# Out_X_Ycalc 'r', 2Th_Ip blue/orange/pink/gold/red, X_Difference 'g' — so an
 	# overlay never reads as fit output. This intentionally differs from the palette
-	# in pxrd_quickplot.py, whose 'black' and 'goldenrod' would collide here.
+	# in quickplot, whose 'black' and 'goldenrod' would collide here.
 	'reflection_color_cycle': ['magenta', 'teal', 'darkviolet', 'saddlebrown', 'olive'],
 	'reflection_linestyle': ':',
 	'reflection_linewidth': 0.7,
@@ -742,7 +742,7 @@ def get_unit_cell_info(path):
 # ==========================================
 # REFLECTION OVERLAY (-r)
 # ==========================================
-# Ported from pxrd_quickplot.py. The Bragg tick rows above come from the fit itself
+# Shared with quickplot via core.cif. The Bragg tick rows above come from the fit itself
 # (TOPAS 2Th_Ip files); this overlay is the opposite — reflections simulated from a
 # CIF that is NOT in the fit, to check whether a leftover feature belongs to a
 # suspected impurity phase.

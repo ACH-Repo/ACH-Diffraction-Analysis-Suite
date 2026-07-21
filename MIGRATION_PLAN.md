@@ -1,10 +1,21 @@
 # ACH Diffraction Analysis Suite — migration plan
 
-Draft for review. Nothing has been implemented; the folder is currently empty.
+**Status: executed.** All four phases are complete; this document is kept as the
+record of what was decided and why. See the README for how to use the result.
 
 Consolidates five standalone scripts into one installable package with five
 commands, a shared core, and per-person configuration. The five existing repos
 stay as-is (archive), and code is copied in fresh rather than history-merged.
+
+Two things turned up during execution that the plan did not anticipate:
+
+- **`cell_param_tables` relied on module-level globals.** `get_data` and
+  `make_new_column` read `space2cryst` and `data` as globals, which the Phase 0
+  `main()` wrap turned into locals. Found by static analysis across all five
+  tools after the first symptom; the other four were clean.
+- **De-duplicating `cryst_round` fixed a rounding bug.** One table cell changed,
+  `4438(8)` -> `4439(7)`, because the old string-slicing algorithm truncated the
+  mean while rounding the esd up. See §6.
 
 ---
 
@@ -163,11 +174,11 @@ you want: profiles are keyed by person ID inside it.
 cif_loc = 'D:\Workfolder\Shared\CIF_LOC'
 
 [profiles.CN]
-cif_loc = 'D:\Workfolder\Nelle\CIF_LOC'
+cif_loc = 'D:\Workfolder\<you>\CIF_LOC'
 qall    = true                       # pp shows all three quality factors
 
 [profiles.AB]
-cif_loc = 'D:\Workfolder\Bauer\CIF_LOC'
+cif_loc = 'D:\Workfolder\<colleague>\CIF_LOC'
 ```
 
 ### Precedence
@@ -192,18 +203,29 @@ option. Settings-not-flags avoids inventing that whole surface.
 
 | # | duplicate | resolution |
 |---|---|---|
-| 1 | `cryst_round` ×2 | **Needs your call — see below.** Unify on one signature. |
+| 1 | `cryst_round` ×2 | **Decided: always keep the value.** See below. |
 | 2 | reflection trio ×2 | Take the Plotter copy (has the negative-N fix). Retires the open chip. |
 | 3 | space-group tables | Plotter's complete 230-entry `sgs_HM` becomes canonical. |
 | 4 | `.out` parsing | Plotter's is most developed; wizard/tables adopt it. |
 
-**Open question on `cryst_round`:** the two copies disagree on TOPAS `LIMIT_MAX` /
-`LIMIT_MIN` annotations. Plotter strips the annotation and keeps the rounded value;
-lattice-tables returns `None`, dropping the parameter from the output table. These
-are opposite intentions and I don't know which is correct crystallographically — a
-parameter that hit a refinement limit is arguably *suspect* (tables' view) or
-*still the best estimate* (plotter's view). Unifying will change one tool's output,
-so this needs a decision before I touch it.
+**Resolved — `cryst_round` keeps the value in all cases.** The two copies disagreed
+on TOPAS `LIMIT_MAX` / `LIMIT_MIN` annotations: the plotter stripped the annotation
+and kept the rounded value, while lattice-tables returned `None`, dropping the
+parameter from the table. The plotter's reading is now canonical — a parameter that
+hit a refinement limit is still the best estimate available. Revisit if a value is
+ever reported that shouldn't be; `core/rounding.py` is the single place to change.
+
+Unifying also corrected a rounding bug. On the example `.out` files exactly one
+table cell changed:
+
+```
+raw 4438.516`_7.476   ->  was 4438(8)   now 4439(7)
+```
+
+The esd rounds to one significant digit (7), so the mean rounds to the units place
+(4438.516 -> 4439). The old algorithm truncated the mean while rounding the esd up,
+disagreeing with itself on both halves. The 1020 `LIMIT_MIN` annotations present in
+those files sit on parameters the table does not display, so they are unaffected.
 
 The tables copy also has a second behaviour the plotter lacks: `parm in ['chi','rwp','rexp']`
 formats quality factors to 2 decimals. That's a caller concern, not a rounding
