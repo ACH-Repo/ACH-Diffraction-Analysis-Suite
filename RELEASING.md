@@ -2,68 +2,53 @@
 
 Step-by-step, because this is the kind of thing nobody remembers between releases.
 
-**One-time setup is steps 1–2.** Every release after that is steps 3–8.
+**One-time setup is steps 1–2.** Every release after that is steps 3–7.
 
 ---
 
-## 1. Accounts and tokens (once)
+## 1. Account and token (once)
 
-You need an account on **both** indexes — they are completely separate systems
-with separate logins:
+Register at <https://pypi.org/account/register/> and enable 2FA — uploads are
+blocked until you do.
 
-- <https://test.pypi.org/account/register/> — the rehearsal index
-- <https://pypi.org/account/register/> — the real one
+Then create an **API token**: Account settings → *API tokens* → *Add API token*.
 
-Both require 2FA before you can upload. Enable it when prompted.
+- Scope "Entire account" for the first upload. Once the project exists, replace
+  it with a token scoped to just this project.
+- Copy it immediately — it is shown **once**. It starts with `pypi-`.
 
-Then create an **API token** on each:
-
-1. Account settings → *API tokens* → *Add API token*
-2. Scope: "Entire account" for the first upload. After the project exists you can
-   replace it with a token scoped to just this project, which is safer.
-3. Copy the token immediately — it is shown **once**. It starts with `pypi-`.
-
-## 2. Store the tokens (once)
+## 2. Store the token (once)
 
 Create `C:\Users\<you>\.pypirc`:
 
 ```ini
 [distutils]
-index-servers =
-    pypi
-    testpypi
+index-servers = pypi
 
 [pypi]
 username = __token__
-password = pypi-AgEIcHlwaS5vcmc...your-real-token...
-
-[testpypi]
-repository = https://test.pypi.org/legacy/
-username = __token__
-password = pypi-AgENdGVzdC5weXBp...your-test-token...
+password = pypi-AgEIcHlwaS5vcmc...your-token...
 ```
 
-`username` is the literal string `__token__` for both — not your account name.
-The token itself goes in `password`.
+`username` is the literal string `__token__` — not your account name. The token
+goes in `password`.
 
-This file contains upload credentials. Keep it out of the repository (it lives in
-your home directory, not here) and do not paste its contents into a chat, an
-issue, or a commit.
+This file is upload credentials. It lives in your home directory, not in the
+repository; don't paste its contents into a chat, an issue, or a commit.
 
-> Prefer not to keep tokens on disk? Skip `.pypirc` and let twine prompt you:
-> it asks for username and password on each upload. Use `__token__` and paste
-> the token at the prompt.
+> Prefer not to keep it on disk? Skip `.pypirc` and let twine prompt you on each
+> upload. Use `__token__` as the username and paste the token at the prompt.
 
 ## 3. Decide the version
 
-Edit `version` in `pyproject.toml`.
+Edit `version` in `pyproject.toml`. `achdiff.__version__` follows automatically —
+it reads the installed metadata rather than repeating the number.
 
-**PyPI will not let you reuse or overwrite a version, ever** — not even if you
-delete the release. A botched `0.2.0` means the next attempt has to be `0.2.1`.
-This is the single biggest reason to rehearse on TestPyPI first.
+**PyPI never lets you reuse a version**, even if you delete the release. A
+botched `0.2.0` means the next attempt has to be `0.2.1`. This is the one
+genuinely irreversible step, which is why step 5 exists.
 
-While below `1.0`, bump the minor for feature or command changes (`0.2.0` →
-`0.3.0`) and the patch for fixes (`0.2.0` → `0.2.1`).
+Below `1.0`: bump the minor for features or command changes, the patch for fixes.
 
 ## 4. Build
 
@@ -76,25 +61,28 @@ python -m build
 Produces two files in `dist/`:
 
 ```
-ach_diffraction_suite-0.2.0-py3-none-any.whl    # what pip normally installs
-ach_diffraction_suite-0.2.0.tar.gz              # source archive, the fallback
+ach_diffraction_suite-<version>-py3-none-any.whl    # what pip normally installs
+ach_diffraction_suite-<version>.tar.gz              # source archive, the fallback
 ```
 
-**Always delete `dist/` first.** `twine upload dist/*` uploads everything it
-finds, including leftovers from previous versions.
+**Always clear `dist/` first.** `twine upload dist/*` uploads everything it finds,
+including leftovers from earlier versions.
 
-## 5. Check before uploading
+## 5. Verify before uploading
+
+Since the version can't be reclaimed, do these three checks every time.
+
+**a. Metadata and README render:**
 
 ```bash
 python -m twine check dist/*
 ```
 
-Both files must say `PASSED`. This validates the metadata and, importantly, that
-the README renders on PyPI — a malformed README is rejected *after* upload,
+Both files must say `PASSED`. A malformed README is rejected *after* upload,
 which burns the version number.
 
-Also confirm the data file made it in, since a missing `resource.htm` breaks `pt`
-and is invisible until someone runs it:
+**b. The data file is in the wheel.** A missing `resource.htm` breaks `pt` and is
+invisible until someone runs it:
 
 ```bash
 python -c "import zipfile,glob; print([n for n in zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist() if n.endswith('.htm')])"
@@ -102,48 +90,45 @@ python -c "import zipfile,glob; print([n for n in zipfile.ZipFile(glob.glob('dis
 
 Expected: `['achdiff/data/resource.htm']`
 
-## 6. Rehearse on TestPyPI
+**c. Install the built wheel and actually run it.** This is the important one: it
+catches anything that works in the development tree but is missing from the
+package.
 
 ```bash
-python -m twine upload --repository testpypi dist/*
+pip uninstall -y ach-diffraction-suite
+pip install dist/ach_diffraction_suite-<version>-py3-none-any.whl
+cd %TEMP%
+python -c "import achdiff; print(achdiff.__version__, achdiff.__file__)"
 ```
 
-Then install it somewhere clean and actually run a command. TestPyPI does not
-mirror real PyPI, so dependencies must come from the real index:
+The path must be in `site-packages`, **not** your `Github` folder — if it points
+at the source tree, an editable install is shadowing the real one and you are not
+testing what you are about to publish. Then drive the tools against real data:
 
 ```bash
-python -m venv C:\Temp\rehearse
-C:\Temp\rehearse\Scripts\activate
-pip install --index-url https://test.pypi.org/simple/ ^
-            --extra-index-url https://pypi.org/simple/ ^
-            ach-diffraction-suite
-pp --help
-pt --help
+pp -s -c -x png          # in a folder of TOPAS output
+pt                       # exercises resource.htm from the install
 achdiff alias list
-deactivate
 ```
 
-That `--extra-index-url` is the part people forget; without it the install fails
-trying to find numpy and pymatgen on TestPyPI.
+Reinstall in editable mode (`pip install -e .`) when you go back to development.
 
-## 7. Upload for real
-
-Only once step 6 worked:
+## 6. Upload
 
 ```bash
 python -m twine upload dist/*
 ```
 
-The project appears at
-<https://pypi.org/project/ach-diffraction-suite/> within a minute or so.
+The project appears at <https://pypi.org/project/ach-diffraction-suite/> within
+a minute or so.
 
-## 8. Verify, then tell the lab
+## 7. Verify and tell the lab
 
 ```bash
 pip install ach-diffraction-suite
 ```
 
-On each TOPAS PC, upgrading is now:
+On each TOPAS PC, updating is now:
 
 ```bash
 pip install --upgrade ach-diffraction-suite
@@ -151,13 +136,13 @@ pip install --upgrade ach-diffraction-suite
 
 Worth mentioning to colleagues on the first release:
 
-- the old `.cmd` shims should be deleted so they cannot shadow the installed
-  commands;
-- `pf` now runs **prefit**, not tables — tables is `pt`;
-- their config in `%APPDATA%\ach-diffraction\config.toml` is untouched by
-  upgrades.
+- delete the old `.cmd` shims so they cannot shadow the installed commands;
+- `pf` runs **prefit**, not tables — tables is `pt`;
+- their config in `%APPDATA%\ach-diffraction\config.toml` survives upgrades;
+- trusted parameters are per person: register your own with
+  `achdiff trusted add <phase> --from <fit>.out -u <your-id>`.
 
-Tag the release so the published version is reproducible:
+Tag the release so the published version stays reproducible:
 
 ```bash
 git tag -a v0.2.0 -m "Release 0.2.0"
@@ -172,17 +157,22 @@ git push origin v0.2.0
 rm -rf dist build src/*.egg-info
 python -m build
 python -m twine check dist/*
-python -m twine upload --repository testpypi dist/*     # rehearse
-python -m twine upload dist/*                           # real
+pip uninstall -y ach-diffraction-suite && pip install dist/*.whl   # then run it
+python -m twine upload dist/*
 ```
 
 ## When it goes wrong
 
 | Symptom | Cause |
 |---|---|
-| `403 Forbidden` | Wrong token, or `username` is not the literal `__token__`. Test and real PyPI tokens are not interchangeable. |
-| `400 File already exists` | That version is already published. Bump the version; it cannot be overwritten. |
+| `403 Forbidden` | Wrong token, or `username` is not the literal `__token__`. |
+| `400 File already exists` | That version is published. Bump it; it cannot be overwritten. |
 | `InvalidDistribution` on check | Malformed metadata or README. Fix before uploading, not after. |
-| Install fails on numpy/pymatgen from TestPyPI | Missing `--extra-index-url https://pypi.org/simple/`. |
-| `pt` fails with a missing resource | `resource.htm` was left out of the build. Check step 5. |
+| `achdiff.__file__` shows your Github folder | An editable install is shadowing the wheel. `pip uninstall` first. |
+| `pt` fails with a missing resource | `resource.htm` was left out of the build. Check 5b. |
 | Uploaded the wrong files | `dist/` still held an older build. Always clear it first. |
+
+> Rehearsing on <https://test.pypi.org> first is possible — separate account and
+> token, upload with `--repository testpypi`, and install with
+> `--extra-index-url https://pypi.org/simple/` so the real dependencies resolve.
+> Step 5c covers most of what it would have caught.
