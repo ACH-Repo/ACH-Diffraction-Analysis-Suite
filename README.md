@@ -131,8 +131,9 @@ set CIF_LOC=D:\Workfolder\<you>\CIF_LOC     # this shell session only
 cif_loc = 'D:\Workfolder\Shared\CIF_LOC'
 
 [profiles.CN]
-cif_loc = 'D:\Workfolder\<you>\CIF_LOC'
-qall    = true          # pp shows R_wp, R_exp and chi by default
+cif_loc   = 'D:\Workfolder\<you>\CIF_LOC'
+topas_exe = 'C:\TOPAS7	c.exe'
+qall      = true        # pp shows R_wp, R_exp and chi by default
 
 [profiles.AB]
 cif_loc = 'D:\Workfolder\<colleague>\CIF_LOC'
@@ -183,10 +184,31 @@ achdiff trusted import cn.toml -u AB        # refuses to clobber without --force
 
 ## The tools
 
-### `rp` — Pawley input wizard
+### `rp` — Pawley input wizard, and refinement runner
+
+```bash
+rp                     # interactive wizard: build a new .inp
+rp myfit.inp           # run TOPAS on an existing .inp and exit
+```
 
 Walks through data file, phases, instrument, background, naming, and comments,
 then writes a TOPAS `.inp` and optionally launches the refinement.
+
+Given a filename it skips the wizard entirely and just runs the refinement —
+for `.inp` files you have edited by hand, so you never type the full path to
+`tc.exe`. The engine runs with its working directory set to the `.inp`'s own
+folder, so relative `Out_X_Yobs(...)` paths land beside it rather than wherever
+you happened to be standing. TOPAS's exit code is reported and passed through.
+
+The engine location is a setting, not a hardcoded path:
+
+```bash
+achdiff profile set -u CN topas_exe="C:\TOPAS7	c.exe"
+set TOPAS_EXE=C:\TOPAS6	c.exe        # this shell only
+rp myfit.inp --topas "C:\TOPAS7	c.exe"
+```
+
+It defaults to `C:\TOPAS7	c.exe`, which is what the original script assumed.
 
 Background options, in menu order: a zeroed polynomial (6 coefficients, the safe
 starting point for any holder), the pre-refined `silicon` and `plastic` holder

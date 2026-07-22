@@ -335,10 +335,54 @@ def parse_brml_instrument(brml_path: str) -> tuple:
 # WIZARD INTERACTIVE CONSOLE FLOW
 # ==========================================
 
+def run_topas(inp_path, exe):
+	"""Run the refinement engine on an existing .inp. Returns a process exit code.
+
+	The engine runs with its working directory set to the .inp's own folder and
+	is handed the bare filename, because a Pawley .inp names its outputs
+	relatively (`Out_X_Yobs("name_pawley_01_X_Yobs.txt")`). Launching from
+	elsewhere would otherwise scatter the results into whatever directory the
+	command happened to be typed in.
+	"""
+	inp = Path(inp_path)
+	if not inp.is_file():
+		print(f'[-] No such file: {inp}')
+		return 1
+	if inp.suffix.lower() != '.inp':
+		print(f'[!] {inp.name} does not end in .inp; passing it to TOPAS anyway.')
+	if not os.path.exists(exe):
+		print(f'[-] Refinement engine not found at {exe}')
+		print('    Point at yours with --topas, the TOPAS_EXE environment variable,')
+		print('    or: achdiff profile set -u <ID> topas_exe="C:\\...\\tc.exe"')
+		return 1
+
+	print(f'[*] Running {exe}')
+	print(f'    on {inp.name}  (in {inp.parent.resolve()})')
+	try:
+		# check=False: a refinement that fails to converge is a normal outcome to
+		# report, not a Python traceback.
+		result = subprocess.run([exe, inp.name], cwd=str(inp.parent.resolve()))
+	except OSError as e:
+		print(f'[-] Could not start the engine: {e}')
+		return 1
+	if result.returncode == 0:
+		print('[+] TOPAS run complete.')
+	else:
+		print(f'[-] TOPAS exited with code {result.returncode}.')
+	return result.returncode
+
+
 def _build_parser():
 	parser = argparse.ArgumentParser(
 		prog=prog_name('rp'),
-		description='Interactive wizard generating TOPAS Pawley .inp files.')
+		description='Interactive wizard generating TOPAS Pawley .inp files. '
+		            'Given an existing .inp, runs the refinement on it instead.')
+	parser.add_argument('inp', nargs='?', default=None, metavar='FILE.inp',
+	                    help='Run TOPAS on this file and exit, skipping the wizard. '
+	                         'For .inp files you have edited by hand.')
+	parser.add_argument('--topas', dest='topas_exe', default=None, metavar='PATH',
+	                    help='Path to the TOPAS executable (tc.exe). Overrides the '
+	                         'TOPAS_EXE env var and any saved profile.')
 	parser.add_argument('--cif-loc', dest='cif_loc', default=None,
 	                    help='CIF library directory. Overrides the CIF_LOC env var '
 	                         'and any saved profile.')
@@ -348,6 +392,13 @@ def _build_parser():
 
 def main():
 	args = _build_parser().parse_known_args()[0]
+
+	# `rp somefit.inp` is a direct engine run, not a wizard session: the file
+	# already exists, usually because it was edited by hand after generation.
+	if args.inp:
+		user, _ = identity.resolve(args.user)
+		exe = config.get('topas_exe', cli_value=args.topas_exe, user=user)
+		return run_topas(args.inp, exe)
 
 	clear_terminal()
 	print("====================================================")
@@ -558,14 +609,11 @@ def main():
 			out_file.write(full_file_str)
 		print(f"[+] File written successfully to: '{inp_file_path}'")
 
-		# Launch engine cleanly using subprocess
-		engine_executable = r"C:\TOPAS7\tc.exe"
-		if os.path.exists(engine_executable):
-			print('\nLaunching calculation engine subprocess...')
-			subprocess.run([engine_executable, inp_file_path], check=True)
-			print("[+] TOPAS optimization run complete.")
-		else:
-			print(f"[-] Warning: The file was saved, but 'tc.exe' was not found at {engine_executable}")
+		# Same launch path as `rp <file>.inp`, so engine location, error reporting
+		# and working directory behave identically however the run was started.
+		engine_executable = config.get('topas_exe', cli_value=args.topas_exe, user=user)
+		print()
+		run_topas(inp_file_path, engine_executable)
 	else:
 		print("\n[-] Operation cancelled. No files were saved.")
 

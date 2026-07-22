@@ -39,11 +39,16 @@ CONFIG_FILENAME = 'config.toml'
 # and people's existing shells already set it.
 ENV_OVERRIDES = {
 	'cif_loc': 'CIF_LOC',
+	'topas_exe': 'TOPAS_EXE',
 }
 
 # Built-in fallbacks, used when nothing else supplies a value.
 BUILTIN_DEFAULTS = {
 	'cif_loc': r'D:\Workfolder\<you>\CIF_LOC',
+	# The refinement engine. Hardcoded to TOPAS 7 in the original wizard, which
+	# breaks on any machine with a different version or install location -- the
+	# same problem cif_loc had, so it gets the same treatment.
+	'topas_exe': r'C:\TOPAS7\tc.exe',
 	'qall': False,
 }
 
