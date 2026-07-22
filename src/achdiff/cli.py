@@ -219,6 +219,36 @@ def _require_user(args):
 	return user
 
 
+def _report_trusted_save(user, phase, params, previous):
+	"""Print the saved cell, showing what each value replaced.
+
+	Overwriting is the expected workflow -- you re-register a phase every time a
+	better refinement lands -- so it needs no --force. But it does need to be
+	visible: silently replacing numbers you will later seed refinements with is
+	how a worse cell quietly becomes your starting point.
+	"""
+	verb = 'updated' if previous else 'registered'
+	print(f'[+] {phase} {verb} for {user}:')
+	old_cells = {k: v for k, v in (previous or {}).items() if k in PARAM_KEYS}
+	for k in PARAM_KEYS:
+		if k not in params:
+			continue
+		was = old_cells.get(k)
+		if was is None:
+			print(f'      {k:3} = {params[k]}')
+		elif was == params[k]:
+			print(f'      {k:3} = {params[k]}   (unchanged)')
+		else:
+			print(f'      {k:3} = {params[k]}   (was {was})')
+	dropped = sorted(set(old_cells) - set(params))
+	if dropped:
+		print(f'    dropped: {", ".join(dropped)} '
+		      f'(not present in the new refinement)')
+	if previous and previous.get('source'):
+		print(f'    replaces the set from {previous["source"]}'
+		      f'{" on " + previous["registered"] if previous.get("registered") else ""}')
+
+
 def cmd_trusted_list(args):
 	user = _require_user(args)
 	if not user:
@@ -278,12 +308,11 @@ def cmd_trusted_add(args):
 		return 1
 
 	import datetime
+	previous = config.trusted_params(user).get(args.phase)
 	meta = {'source': os.path.basename(args.source),
 	        'registered': datetime.date.today().isoformat()}
 	path = config.save_trusted(user, args.phase, params, meta)
-	print(f'[+] {args.phase} registered for {user}:')
-	for k, v in params.items():
-		print(f'      {k:3} = {v}')
+	_report_trusted_save(user, args.phase, params, previous)
 	print(f'    -> {path}')
 	return 0
 
@@ -308,10 +337,12 @@ def cmd_trusted_set(args):
 		print('[!] Give at least one parameter, e.g. a=15.484356`_0.000738')
 		return 1
 	import datetime
+	previous = config.trusted_params(user).get(args.phase)
 	path = config.save_trusted(user, args.phase, params,
 	                           {'source': 'manual entry',
 	                            'registered': datetime.date.today().isoformat()})
-	print(f'[+] {args.phase} registered for {user} -> {path}')
+	_report_trusted_save(user, args.phase, params, previous)
+	print(f'    -> {path}')
 	return 0
 
 

@@ -175,6 +175,29 @@ on your material. Two people can register the same phase name with different
 values and neither affects the other. Nothing ships with the package, so a new
 user starts with an empty set rather than someone else's numbers.
 
+### Replacing a set as your fits improve
+
+Re-register the phase. No flag, no need to remove it first — the new cell simply
+replaces the old one, and the command shows what it changed:
+
+```
+$ achdiff trusted add ZIF-4 --from CN-better_pawley_01.out
+[+] ZIF-4 updated for CN:
+      a   = 15.484356`_0.000738   (was 15.475318`_0.000986)
+      b   = 15.511304`_0.000704   (was 15.513932`_0.000957)
+      c   = 18.103277`_0.000892   (unchanged)
+    replaces the set from CN-first_pawley_01.out on 2026-07-22
+```
+
+A cell is replaced as a whole set, never merged parameter by parameter — mixing
+`a` from one refinement with `c` from another describes a cell that was never
+observed. If the new set has fewer parameters than the old one, the dropped ones
+are listed so the loss is visible rather than silent.
+
+`achdiff trusted import` is the exception: it *does* refuse to overwrite without
+`--force`, because it can replace many phases at once from a file you did not
+write. A single `add` from a `.out` you just chose is a different risk.
+
 Sharing is possible, but only as a deliberate act:
 
 ```bash
