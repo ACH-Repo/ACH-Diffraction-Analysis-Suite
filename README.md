@@ -71,10 +71,20 @@ by **ID**, using the same 2–3 letter prefix already used on sample names
 ### First run: register yourself
 
 ```bash
-pp -u CN --cif-loc "D:\Workfolder\<you>\CIF_LOC" --save-profile
+achdiff profile set -u CN cif_loc="D:\Workfolder\<you>\CIF_LOC"
 ```
 
-That writes a profile for `CN`. From then on, working in a directory of your own
+That writes a profile for `CN`. Add other settings the same way, either at once
+or later — they merge rather than replace:
+
+```bash
+achdiff profile set -u CN qall=true      # pp shows all three quality factors
+achdiff profile unset -u CN qall         # back to the default
+achdiff profile list                     # who is registered, and with what
+```
+
+Unknown setting names are rejected rather than stored, so a typo can't sit in
+your config being silently ignored. From then on, working in a directory of your own
 `CN-` prefixed samples, the tools pick it up automatically:
 
 ```

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ach-diffraction-suite"
-version = "0.2.1"
+version = "0.3.0"
 description = "PXRD and TOPAS analysis tools: Pawley fit setup, prefitting, plotting, and lattice-parameter tables."
 readme = "README.md"
 requires-python = ">=3.10"

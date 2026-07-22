@@ -169,6 +169,29 @@ check('unknown system keeps everything',
       sorted(topas.free_params(None, {'a': '1', 'b': '1'})), ['a', 'b'])
 
 
+
+# ---------- `achdiff profile set` value coercion ----------
+from achdiff import cli  # noqa: E402
+
+check('bool setting coerces true', cli._coerce('qall', 'true'), True)
+check('bool setting coerces False, not truthy string',
+      cli._coerce('qall', 'false'), False)
+check('bool accepts yes/no forms', (cli._coerce('qall', 'YES'), cli._coerce('qall', 'off')),
+      (True, False))
+try:
+	cli._coerce('qall', 'maybe')
+	check('a non-boolean value for a bool setting raises', 'no raise', 'ValueError')
+except ValueError:
+	check('a non-boolean value for a bool setting raises', 'ValueError', 'ValueError')
+check('string settings pass through unchanged',
+      cli._coerce('cif_loc', r'D:\Some\Path'), r'D:\Some\Path')
+
+# settings merge rather than replace, so editing one does not drop the others
+config.save_profile('MG', {'cif_loc': r'D:\A'})
+config.save_profile('MG', {'qall': True})
+check('a later save merges with the earlier one',
+      sorted(config.profiles()['MG']), ['cif_loc', 'qall'])
+
 print()
 print(f'{len(fails)} failure(s)' + (': ' + ', '.join(fails) if fails else ''))
 sys.exit(1 if fails else 0)

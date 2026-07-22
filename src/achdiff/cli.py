@@ -388,6 +388,83 @@ def cmd_trusted_import(args):
 	return 0
 
 
+def _coerce(key, raw):
+	"""Convert a KEY=VALUE string to the type the setting actually uses.
+
+	Typed from the built-in default, so `qall=true` stores a boolean rather than
+	the string "true" -- which would be truthy either way, but would also make
+	`qall=false` switch the option *on*.
+	"""
+	default = config.BUILTIN_DEFAULTS.get(key)
+	if isinstance(default, bool):
+		low = raw.strip().lower()
+		if low in ('true', 'yes', 'on', '1'):
+			return True
+		if low in ('false', 'no', 'off', '0'):
+			return False
+		raise ValueError(f'{key} is a true/false setting; got {raw!r}')
+	if isinstance(default, int) and not isinstance(default, bool):
+		return int(raw)
+	return raw
+
+
+def cmd_profile_set(args):
+	user = _require_user(args)
+	if not user:
+		return 1
+
+	known = sorted(config.BUILTIN_DEFAULTS)
+	settings = {}
+	for item in args.assignments:
+		if '=' not in item:
+			print(f'[!] Expected key=value, got {item!r}.')
+			return 1
+		key, raw = item.split('=', 1)
+		key = key.strip()
+		# Unknown keys are rejected rather than stored: a typo that silently sits
+		# in the config, never read by anything, is worse than an error here.
+		if key not in config.BUILTIN_DEFAULTS:
+			print(f'[!] Unknown setting {key!r}. Known settings: {", ".join(known)}')
+			return 1
+		try:
+			settings[key] = _coerce(key, raw)
+		except ValueError as e:
+			print(f'[!] {e}')
+			return 1
+
+	if not settings:
+		print(f'[!] Give at least one setting, e.g. cif_loc="D:\\path\\to\\CIFs"')
+		return 1
+
+	path = config.save_profile(user, settings)
+	print(f'[+] Profile {user} updated:')
+	for k, v in sorted(settings.items()):
+		print(f'      {k} = {v!r}')
+	print(f'    -> {path}')
+
+	if 'cif_loc' in settings and not os.path.isdir(str(settings['cif_loc'])):
+		print(f'[!] Note: {settings["cif_loc"]} is not a directory that exists right now.')
+	return 0
+
+
+def cmd_profile_unset(args):
+	user = _require_user(args)
+	if not user:
+		return 1
+	cfg = config.load()
+	prof = cfg.get('profiles', {}).get(user, {})
+	missing = [k for k in args.keys if k not in prof]
+	if missing:
+		print(f'[!] {user} has no setting(s): {", ".join(missing)}')
+		return 1
+	for k in args.keys:
+		del prof[k]
+	config.write(cfg)
+	print(f'[+] Removed {", ".join(args.keys)} from {user}; '
+	      f'they fall back to defaults again.')
+	return 0
+
+
 def cmd_profile_list(args):
 	cfg = config.load()
 	ids = config.profile_ids(cfg)
@@ -493,10 +570,22 @@ def _build_parser():
 	                  help='Overwrite phases you already have registered.')
 	t_im.set_defaults(func=cmd_trusted_import)
 
-	prof = sub.add_parser('profile', help='Inspect saved per-person profiles.')
+	prof = sub.add_parser('profile', help='Inspect and edit per-person profiles.')
 	prof_sub = prof.add_subparsers(dest='action', required=True)
+
 	p_ls = prof_sub.add_parser('list', help='Show registered profiles and defaults.')
 	p_ls.set_defaults(func=cmd_profile_list)
+
+	p_set = _with_user(prof_sub.add_parser(
+		'set', help='Register or update settings for a person.'))
+	p_set.add_argument('assignments', nargs='+', metavar='KEY=VALUE',
+	                   help='e.g. cif_loc="D:\\Workfolder\\you\\CIF_LOC" qall=true')
+	p_set.set_defaults(func=cmd_profile_set)
+
+	p_unset = _with_user(prof_sub.add_parser(
+		'unset', help='Drop settings so they fall back to defaults.'))
+	p_unset.add_argument('keys', nargs='+', metavar='KEY')
+	p_unset.set_defaults(func=cmd_profile_unset)
 
 	conf = sub.add_parser('config', help='Locate the configuration file.')
 	conf_sub = conf.add_subparsers(dest='action', required=True)
