@@ -33,29 +33,132 @@ def _build_parser():
 	return parser
 
 
+# A TOPAS value: a number, optionally followed by `_<esd>. Anything TOPAS appends
+# after the esd (_LIMIT_MIN_..., _SVD_ERR) is left for cryst_round to strip. The
+# lookbehind stops the digits of a parameter name ("a1", "u2") being read as a value.
+_NUM = r'[+-]?\d+\.?\d*(?:[eE][+-]?\d+)?'
+_VAL = r'(?<![\w.])(%s(?:`?_%s)?)' % (_NUM, _NUM)
+
+# Phase keywords. A multi-phase refinement repeats the space group, cell macro and
+# cell volume once per phase, so each block has to be searched on its own.
+_PHASE_START = re.compile(r'^[ \t]*(?:str|hkl_Is|xo_Is)\b', re.M)
+
+# `load hkl_m_d_th2 I { ... }` reflection tables: thousands of numbers that can
+# only ever produce false positives for the cell searches.
+_PEAK_LIST = re.compile(r'\bload\b[^{]*\{[^{}]*\}', re.S)
+
+
+def strip_peak_lists(text):
+
+	'''Removes the reflection tables from a phase block.'''
+
+	return _PEAK_LIST.sub(' ', text)
+
+
+def split_phases(raw):
+
+	'''Splits a TOPAS .out into one text block per refined phase.
+
+	Everything before the first phase keyword (fit quality, background, device)
+	is dropped: it belongs to the refinement as a whole, not to any one phase.'''
+
+	starts = [m.start() for m in _PHASE_START.finditer(raw)]
+	if not starts:
+		return [raw]
+	bounds = starts + [len(raw)]
+	return [raw[bounds[i]:bounds[i + 1]] for i in range(len(starts))]
+
+
+def phase_names(raw):
+
+	'''(name, space group) pairs from the wizard's audit-trail header:
+	' Selected phases: "ZIF-62" (61) | "H2pPDA" (14)'''
+
+	match = re.search(r'Selected phases:(.*)', raw)
+	if not match:
+		return []
+	return re.findall(r'"([^"]*)"\s*\(([^)]*)\)', match.group(1))
+
+
+def uniquify(labels):
+
+	'''Appends a running index, from zero, to any label used more than once.'''
+
+	counts = {}
+	for label in labels:
+		counts[label] = counts.get(label, 0) + 1
+
+	running = {}
+	out = []
+	for label in labels:
+		if counts[label] > 1:
+			out.append('%s #%d'%(label, running.get(label, 0)))
+			running[label] = running.get(label, 0) + 1
+		else:
+			out.append(label)
+	return out
+
+
+def phase_labels(blocks, names, phases):
+
+	'''One suffix per phase, unique within the file. The filename stays the column
+	heading; these only tell that file's phases apart, so they carry the substance
+	where one is named and the space group where none is.'''
+
+	pending = list(names) # header entries not yet claimed by a block
+	sg_index = {}
+	labels = []
+
+	for i, (block, data) in enumerate(zip(blocks, phases)):
+		sg = data['space_group']
+
+		match = re.search(r'^[ \t]*phase_name\s+"?([^"\n]+)"?', block, re.M)
+		if match:
+			labels.append(match.group(1).strip())
+			continue
+
+		# Claim the first unused header entry carrying this space group. Matching
+		# on the space group rather than on position survives the wizard dropping
+		# a phase whose crystal system it has no macro for.
+		claimed = next((pair for pair in pending if pair[1] == sg), None)
+		if claimed:
+			pending.remove(claimed)
+			labels.append(claimed[0])
+		elif sg == 'Not found':
+			labels.append('phase %d'%(i + 1))
+		else:
+			# A refinement may list the same space group twice or more, so the
+			# fallback carries a running index rather than the bare number.
+			labels.append('SG %s #%d'%(sg, sg_index.get(sg, 0)))
+			sg_index[sg] = sg_index.get(sg, 0) + 1
+
+	return uniquify(labels)
+
+
 def find_space_group(raw,data):
 
 	'''Finds the space group in outfile (str). If not found, add "Not found" to data dict.'''
 
-	rexes = [r'space_group\s+"*([\w\d/-]+)"*'] # Error index 3 in backs.log
-
-	for rex in rexes:
-		match = re.search(rex,raw)
-		if match:
-			data['space_group'] = match.group(1)
-			break
-		else:
-			pass
-
-	try:
-		data['space_group']
-	except KeyError:
+	match = re.search(r'^[ \t]*space_group\s+"*([\w\d/-]+)"*', raw, re.M)
+	if match:
+		data['space_group'] = match.group(1)
+	else:
 		data['space_group'] = 'Not found'
 		print('The space group could not be found in the .out file!!!: %s'%data['filename'])
 
 	return data
 
 
+def find_quality(raw):
+
+	'''Fit-quality factors. These sit outside the phase blocks -- one refinement,
+	one set of numbers -- so every phase column of a file repeats them.'''
+
+	quality = {}
+	for key, keyword in (('rwp', 'r_wp'), ('rexp', 'r_exp'), ('chi', 'gof')):
+		match = re.search(r'\b%s\s+(\d+\.?\d*)' % keyword, raw)
+		quality[key] = match.group(1) if match else 'Not found'
+	return quality
 
 
 
@@ -63,26 +166,8 @@ def find_volume(raw,data):
 
 	'''Finds the volume in the .out file (str) If none found, adds "Not found".'''
 
-	rexes = [r'volume\s+(\d+\.\d+`_\d+\.\d+)',
-			 r'volume\s+(\d+\.\d+)`*',
-			 r'cell_volume\s+(\d+\.\d+`_\d+\.\d+)',
-			 r'cell_volume\s+(\d+\.\d+)`*'] # Error index 3 in backs.log
-
-	for rex in rexes: # iterate over patterns and break at first match
-		match = re.search(rex,raw)
-		if match:
-			data['volume'] = match.group(1)
-			break
-		else:
-			pass # move on to next pattern
-
-	try:
-		data['volume']
-	except KeyError:
-		data['volume'] = 'Not found'
-		# print('The volume could not be found in the .out file!!!')
-		# print('In rare cases, this is because there simply is no volume.')
-		# print('More likely, however, none of the regexes (rex) in the list of regexes (rexes), can match the pattern of the volume inside the .out file.')
+	match = re.search(r'^[ \t]*(?:cell_)?volume\s+' + _VAL, raw, re.M)
+	data['volume'] = match.group(1) if match else 'Not found'
 
 	return data
 
@@ -96,18 +181,20 @@ def complete_lengths(raw,data,crystal_system,found):
 					 'monoclinic':{'a':0,'b':0,'c':0},
 					 'orthorhombic':{'a':1,'b':1,'c':0},
 					 'tetragonal':{'a':1,'b':1,'c':0},
+					 'trigonal':{'a':1,'b':1,'c':0},
 					 'hexagonal':{'a':1,'b':1,'c':0},
 					 'cubic':{'a':1,'b':1,'c':1},
 					 'rhombohedral':{'a':1,'b':1,'c':1}}
 
-	equals = equal_lengths[crystal_system]
-	a = data['a']
+	equals = equal_lengths.get(crystal_system, {})
+	a = data.get('a')
 
-	for length in equals.keys():
-		if equals[length] == 1:
-			data[length] = a
-			if length not in found:
-				found.append(length)
+	if a is not None:
+		for length in equals.keys():
+			if equals[length] == 1:
+				data[length] = a
+				if length not in found:
+					found.append(length)
 
 	if len(found) == 3:
 		pass
@@ -115,12 +202,13 @@ def complete_lengths(raw,data,crystal_system,found):
 		for length in ['a','b','c']:
 			if length not in found:
 				data[length] = 'Not found'
-		print('Not alt notation, yet not all parameters found. This is weird.')
+		print('Could not resolve all lengths for crystal system %r. FILE: %s'
+			  %(crystal_system, data.get('filename')))
 		print('Make a bug report at: "https://github.com/p3rAsperaAdAstra/TOPAS-Param-Tables-public-"')
 
 
 	return data
-	
+
 
 
 
@@ -133,16 +221,24 @@ def complete_angles(raw,data,crystal_system,found):
 				  'monoclinic':{'al':'90','ga':'90'},
 				  'orthorhombic':{'al':'90','be':'90','ga':'90'},
 				  'tetragonal':{'al':'90','be':'90','ga':'90'},
+				  'trigonal':{'al':'90','be':'90','ga':'120'},
 				  'hexagonal':{'al':'90','be':'90','ga':'120'},
 				  'cubic':{'al':'90','be':'90','ga':'90'},
-				  'rhombohedral':{'al':'90','be':'90'}}
+				  'rhombohedral':{}}
 
-	givens = fix_angles[crystal_system]
+	givens = fix_angles.get(crystal_system, {})
 
 	for angle in givens.keys():
 		data[angle] = givens[angle]
 		if angle not in found:
 			found.append(angle)
+
+	# Rhombohedral axes have al=be=ga, and TOPAS's macro spells out only al.
+	if crystal_system == 'rhombohedral' and 'al' in data:
+		for angle in ('be','ga'):
+			data[angle] = data['al']
+			if angle not in found:
+				found.append(angle)
 
 	if len(found) == 3:
 		pass
@@ -157,80 +253,41 @@ def complete_angles(raw,data,crystal_system,found):
 
 
 
-def find_alt_parms(raw,data):
+_CELL_MACRO = re.compile(
+	r'^[ \t]*(Triclinic|Monoclinic|Orthorhombic|Tetragonal|Trigonal|Hexagonal|'
+	r'Rhombohedral|Cubic)\s*\(([^)]*)\)', re.M)
 
-	'''If the number of lengths found by find_lengths() is equal to zero, a search for the alternative notation
-	of TOPAS .out files is executed. If the number of lengths is still zero after this, print out error and add 
-	"Not found" to data for those lengths.'''
-
-
-	# Patterns are ordered so wider matches (more length groups) are tried first;
-	# otherwise an Orthorhombic line would match a 2-length pattern and lose c.
-	rexes = [# 3 lengths with error (Orthorhombic)
-			 r'([a-zA-Z]+)\(\s*@*\s*(\d+\.\d+`*_\d+\.\d+)[a-zA-Z_]*\d*\.*\d*,\s*@*\s*(\d+\.\d+`*_\d+\.\d+)[a-zA-Z_]*\d*\.*\d*,\s*@*\s*(\d+\.\d+`*_\d+\.\d+)[a-zA-Z_]*\d*\.*\d*',
-			 # 3 lengths without error
-			 r'([a-zA-Z]+)\(\s*@*\s*(\d+\.\d+)[a-zA-Z_]*\d*\.*\d*`*,\s*@*\s*(\d+\.\d+)[a-zA-Z_]*\d*\.*\d*`*,\s*@*\s*(\d+\.\d+)[a-zA-Z_]*\d*\.*\d*`*',
-			 # 2 lengths, various error combinations
-			 r'([a-zA-Z]+)\(\s*@*\s*(\d+\.\d+`*_\d+.\d+)[a-zA-Z_]*\d*\.*\d*,\s*@*\s*(\d+\.\d+`*_\d+\.\d+)[a-zA-Z_]*\d*\.*\d*',
-			 r'([a-zA-Z]+)\(\s*@*\s*(\d+\.\d+`*_\d+\.\d+)[a-zA-Z_]*\d*\.*\d*,\s*@*\s*(\d+\.\d+)[a-zA-Z_]*\d*\.*\d*`*',
-			 r'([a-zA-Z]+)\(\s*@*\s*(\d+\.\d+`*_\d+\.\d+)[a-zA-Z_]*\d*\.*\d*,\s*@*\s*(\d+\.\d+)[a-zA-Z_]*\d*\.*\d*`*',
-			 r'([a-zA-Z]+)\(\s*@*\s*(\d+\.\d+)[a-zA-Z_]*\d*\.*\d*`*,\s*@*\s*(\d+\.\d+)[a-zA-Z_]*\d*\.*\d*`*',
-			 # 1 length (cubic)
-			 r'([a-zA-Z]+)\(\s*@*\s*(\d+.\d+`*_\d+.\d+)[a-zA-Z_]*\d*\.*\d*',
-			 r'([a-zA-Z]+)\(\s*@*\s*(\d+.\d+)[a-zA-Z_]*\d*\.*\d*`*\s*']
-
-	match = None
-	sys = None
-	for rex in rexes:
-		match = re.search(rex, raw)
-		if match:
-			sys = match.group(1)
-			break
-
-	if sys:
-		if sys == 'Cubic':
-			a = match.group(2)
-			data['a'] = a; data['b'] = a; data['c'] = a; data['al'] = '90'; data['be'] = '90'; data['ga'] = '90'
-			data['crystal_system'] = 'cubic'
-		elif sys == 'Hexagonal':
-			a,c = match.group(2,3)
-			data['a'] = a; data['b'] = a; data['c'] = c; data['al'] = '90'; data['be'] = '90'; data['ga'] = '120'
-			data['crystal_system'] = 'hexagonal'
-		elif sys == 'Rhombohedral':
-			a,ga = match.group(2,3)
-			data['a'] = a; data['b'] = a; data['c'] = a; data['al'] = '90'; data['be'] = '90'; data['ga'] = ga
-			data['crystal_system'] = 'rhombohedral'
-		elif sys == 'Tetragonal':
-			a,c = match.group(2,3)
-			data['a'] = a; data['b'] = a; data['c'] = c; data['al'] = '90'; data['be'] = '90'; data['ga'] = '90'
-			data['crystal_system'] = 'tetragonal'
-		elif sys == 'Orthorhombic':
-			a,b,c = match.group(2,3,4)
-			data['a'] = a; data['b'] = b; data['c'] = c; data['al'] = '90'; data['be'] = '90'; data['ga'] = '90'
-			data['crystal_system'] = 'orthorhombic'
-		elif sys == 'Monoclinic':
-			print('%s alt notation not implemented. format first encountered'%sys)
-		elif sys == 'Triclinic':
-			print('%s alt notation not implemented. format first encountered'%sys)
-		elif sys == 'Trigonal':
-			a,c = match.group(2,3)
-			data['a'] = a; data['b'] = a; data['c'] = c; data['al'] = '90'; data['be'] = '90'; data['ga'] = '120'
-			data['crystal_system'] = 'trigonal'
-
-	else:
-		print('No alt notation found.')
+# Which cell parameters each TOPAS lattice macro spells out, in argument order.
+# The rest follow from the crystal system and are filled in by complete_*().
+_MACRO_PARAMS = {'triclinic':    ('a','b','c','al','be','ga'),
+				 'monoclinic':   ('a','b','c','be'),
+				 'orthorhombic': ('a','b','c'),
+				 'tetragonal':   ('a','c'),
+				 'trigonal':     ('a','c'),
+				 'hexagonal':    ('a','c'),
+				 'rhombohedral': ('a','al'),
+				 'cubic':        ('a',)}
 
 
-	parms = ['a','b','c','al','be','ga']
+def find_cell_macro(raw,data):
 
-	for par in parms:
-		if par not in data.keys():
-			data[par] = 'Not found'
-			print('Could not find %s in find_alt_parms(). FILE: %s'%(par,data['filename']))
+	'''Reads a TOPAS lattice macro, e.g. `Orthorhombic(@ 15.506`_0.006, ...)`, and
+	returns its crystal system, or None if the block has no such line.
 
-	return data
+	Tried before the plain `a <value>` notation, because the macro is unambiguous:
+	a bare-name search will happily read `chi2_convergence_criteria 0.000001` as a.'''
 
+	match = _CELL_MACRO.search(raw)
+	if not match:
+		return None
 
+	system = match.group(1).lower()
+	for name, arg in zip(_MACRO_PARAMS[system], match.group(2).split(',')):
+		value = re.search(_VAL, arg)
+		if value:
+			data[name] = value.group(1)
+
+	return system
 
 
 def find_lengths(raw,data,crystal_system):
@@ -238,34 +295,17 @@ def find_lengths(raw,data,crystal_system):
 	'''Finds the lengths a,b,c in outfile (str). If not found, add "Not found" to data dict.
 	Calls complete_lengths() to check if can be derived from crystal system.'''
 
-	rexes = [r'%s\s+@*\s*(\d+\.\d+`*_\d+\.\d+)[a-zA-Z_]*\d*\.*\d*',
-			 r'%s\s+@*\s*(\d+\.\d+)`*_[a-zA-Z_]*\d*\.*\d*',
-			 r'%s\s+@*\s*(\d+\.\d+)`',
-			 r'%s\s+@*\s*(\d+\.\d+)`*'] # might need to be modified later.
-
-	lengths = ['a','b','c'] # lengths to be searched for
 	found = [] # append found lengths so that they can be skipped
 
-	for rex in rexes: # iterate over patterns and break at first match
-		for length in lengths:
-			if length in found:
-				pass
-			else:
-				match = re.search(rex%length,raw)
-				if match:
-					data[length] = match.group(1)
-					found.append(length)
-				else:
-					pass
+	for length in ['a','b','c']:
+		match = re.search(r'^[ \t]*%s\s+@?\s*%s'%(length,_VAL), raw, re.M)
+		if match:
+			data[length] = match.group(1)
+			found.append(length)
 
-
-	if len(found) == 3: # all lengths found
-		pass
-	elif 1 < len(found) < 3: # call complete_lengths()
+	if len(found) < 3:
 		data = complete_lengths(raw,data,crystal_system,found)
-	elif len(found) == 0: # call find_alt_lengths()
-		data = find_alt_parms(raw,data)
-	
+
 	return data
 
 
@@ -274,33 +314,17 @@ def find_angles(raw,data,crystal_system):
 	'''Finds the lengths a,b,c in outfile (str). If not found, add "Not found" to data dict.
 	Calls complete_lengths() to check if can be derived from crystal system.'''
 
-	rexes = [r'\s+%s\s*@*\s*(\d+.\d+`*_\d+.\d+)',
-			 r'\s+%s\s*@*\s*(\d+.\d+)`*',
-			 r'\s+%s\s*@*\s*(\d+)[^:]',] # might need to be modified later.
+	found = [] # append found angles so that they can be skipped
 
-	angles = ['al','be','ga'] # lengths to be searched for
-	found = [] # append found lengths so that they can be skipped
+	for angle in ['al','be','ga']:
+		match = re.search(r'^[ \t]*%s\s+@?\s*%s'%(angle,_VAL), raw, re.M)
+		if match:
+			data[angle] = match.group(1)
+			found.append(angle)
 
-	for rex in rexes: # iterate over patterns and break at first match
-		for angle in angles:
-			if angle in found:
-				pass
-			else:
-				match = re.search(rex%angle,raw)
-				if match:
-					data[angle] = match.group(1)
-					found.append(angle)
-				else:
-					pass
-
-
-	if len(found) == 3: # all lengths found
-		pass
-	elif 1 < len(found) < 3: # call complete_angles()
+	if len(found) < 3:
 		data = complete_angles(raw,data,crystal_system,found)
-	elif len(found) == 0: # call find_alt_angles()
-		data = find_alt_parms(raw,data)
-	
+
 	return data
 
 
@@ -314,39 +338,70 @@ def format_quality(parm, value):
 	return value
 
 
-def get_data(path,data):
+def get_phase_data(block,data):
 
-	'''Finds all the available data in a TOPAS output file.'''
+	'''Finds the cell of a single phase within its own block of a TOPAS .out file.'''
+
+	block = strip_peak_lists(block)
+
+	data = find_space_group(block,data)
+
+	# The macro wins over the space-group lookup, because it names the axis
+	# setting actually refined: R-3c is listed as rhombohedral, but a file
+	# writing `Trigonal(a, c)` is on hexagonal axes, and completing it as
+	# rhombohedral would overwrite c with a.
+	macro_system = find_cell_macro(block,data)
+	if macro_system:
+		data['crystal_system'] = macro_system
+	else:
+		entry = space2cryst.get(data['space_group'].lower())
+		data['crystal_system'] = entry[1] if entry else 'Not found'
+
+	if macro_system:
+		lengths = [k for k in ('a','b','c') if k in data]
+		angles = [k for k in ('al','be','ga') if k in data]
+		if len(lengths) < 3:
+			complete_lengths(block,data,macro_system,lengths)
+		if len(angles) < 3:
+			complete_angles(block,data,macro_system,angles)
+	else:
+		data = find_lengths(block,data,data['crystal_system'])
+		data = find_angles(block,data,data['crystal_system'])
+
+	data = find_volume(block,data)
+
+	return data
+
+
+def get_data(path,base):
+
+	'''Parses a TOPAS output file into one data dict per refined phase.'''
 
 	with open(path,'r',encoding='utf8',errors='ignore') as inf:
 		raw = inf.read()
 
-	data = find_space_group(raw,data) # find space group first
-	try:
-		data['crystal_system'] = space2cryst[data['space_group'].lower()][1] # now based on new and improved space2cryst
-	except KeyError:
-		data['crystal_system'] = space2cryst[data['space_group'].lower()][1] # now based on new and improved space2cryst
-	data = find_volume(raw,data) # find volume of ??unit cell??
+	quality = find_quality(raw)
+	names = phase_names(raw)
+	blocks = split_phases(raw)
 
-	data = find_lengths(raw,data,data['crystal_system']) # find lengths
-	data = find_angles(raw,data,data['crystal_system']) # find angles
-	
-	# find rwp, rexp and gof (these should be easy)
-	rwp = re.search(r'r_wp\s+(\d+\.*\d*)',raw).group(1)
-	rexp = re.search(r'r_exp\s+(\d+\.*\d*)',raw).group(1)
-	chi = re.search(r'gof\s+(\d+\.*\d*)',raw).group(1)
+	phases = []
+	for block in blocks:
+		data = dict(base)
+		data = get_phase_data(block,data)
+		data.update(quality)
 
-	data['rwp'] = rwp
-	data['rexp'] = rexp
-	data['chi'] = chi
+		parms = ['a','b','c','al','be','ga','space_group','crystal_system','chi','rwp','rexp','volume']
+		for par in parms:
+			if par not in data.keys():
+				data[par] = 'Not found'
 
-	parms = ['a','b','c','al','be','ga','space_group','crystal_system','chi','rwp','rexp','volume']
-	for par in parms:
-		if par not in data.keys():
-			data[par] = 'Not found'
+		phases.append(data)
 
-	return data
-	
+	for data, label in zip(phases, phase_labels(blocks,names,phases)):
+		data['phase_label'] = label
+
+	return phases
+
 
 
 def write_soup(soup,path='check.htm'):
@@ -398,7 +453,8 @@ def make_new_column(template,outsoup,params):
 		new_td = copy.copy(td_template)
 
 		if key == 'space_group' and val != 'Not found': # use embedded formatted space group
-			formatted_str = space2cryst[data['space_group'].lower()][0]
+			entry = space2cryst.get(val.lower())
+			formatted_str = entry[0] if entry else val
 			new_td_str = str(new_td)
 			new_td_str = new_td_str.replace('Blank',formatted_str)
 			new_td = BeautifulSoup(new_td_str, 'html.parser')
@@ -546,12 +602,10 @@ def prompt_output_filename(default='done.htm'):
 
 # Main Loop
 def main():
-	# get_data() and make_new_column() read these as module globals. They used to
-	# be assigned at module level, so wrapping this block in main() would make them
-	# locals and break the lookups. (make_new_column also takes `data` as its
-	# `params` argument but reads the global in one branch -- preserved as-is
-	# rather than corrected, to keep this move behaviour-neutral.)
-	global space2cryst, data
+	# get_phase_data() and make_new_column() read this as a module global. It used
+	# to be assigned at module level, so wrapping this block in main() would make
+	# it a local and break the lookups.
+	global space2cryst
 
 	args = _build_parser().parse_known_args()[0]
 
@@ -571,12 +625,16 @@ def main():
 	for tr in outsoup.find_all('tr'): tr.find_all('td')[-1].decompose() # remove blank column. Change later if useful.
 
 	for i,file in enumerate(input_files):
-		data = {}
-		data['filename'] = os.path.basename(file)
 		print('%s: (%s/%s)'%(file,i+1,len(input_files)))
-		data = get_data(file,data)
-		outsoup = make_new_column(template,outsoup,data)
-	
+		phases = get_data(file,{'filename':os.path.basename(file)})
+		for phase in phases:
+			# One column per phase; without the suffix a multi-phase file would
+			# produce several identically-headed columns.
+			if len(phases) > 1:
+				phase['filename'] = '%s (%s)'%(phase['filename'],phase['phase_label'])
+				print('  - %s'%phase['filename'])
+			outsoup = make_new_column(template,outsoup,phase)
+
 	write_soup(outsoup, output_path)
 	print('\nWrote %s' % output_path)
 

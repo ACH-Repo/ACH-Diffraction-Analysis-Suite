@@ -272,10 +272,25 @@ pq -i *.brml -s -x png              # save without a window
 Reads `.xy`, `.raw`, `.brml`, `.dat`, PDF-card XML exports. Same `-r` reflection
 overlay as `pp`.
 
+Bruker `.raw` (RAW1.01) files are decoded natively — no TOPAS conversion step,
+so plotting works on a machine without a TOPAS licence. The reader was verified
+against PowDLL's RIET7 export: identical 2θ grid, identical intensities. Older
+RAW generations (RAW2/3/4) are not covered and still need PowDLL or TOPAS to
+convert; they raise a message saying so rather than plotting nonsense.
+
 ### `pt` — lattice-parameter tables
 
 Interactive selection of `.out` files, producing an HTML table of refined cell
 parameters with crystallographic rounding.
+
+A multi-phase refinement gets one column per phase. The filename stays the
+heading and the phase is a suffix: `OJ-9_cryst.out (ZIF-62)`. The suffix comes
+from `phase_name`, else from the wizard's `Selected phases:` header (matched by
+space group, not by position), else from the space group itself. Since one fit
+can contain the same space group — or the same name — more than once, anything
+that repeats gets a running index from zero: `(SG 61 #0)`, `(SG 61 #1)`.
+Single-phase files are headed with the filename alone, as before. Fit-quality
+factors describe the whole refinement, so they repeat across a file's columns.
 
 The table template and space-group lookup come from `resource.htm`, a real file
 shipped with the package rather than a blob compiled into the source. To use
