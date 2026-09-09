@@ -291,3 +291,12 @@ def save_profile(user, settings):
 	cfg = load()
 	cfg.setdefault('profiles', {}).setdefault(user, {}).update(settings)
 	return write(cfg)
+
+
+def save_defaults(settings):
+	"""Create or update [defaults] with `settings`. These apply to everyone who
+	has no value of their own, so a shared machine can be set up once and used
+	without -u. Returns the path written."""
+	cfg = load()
+	cfg.setdefault('defaults', {}).update(settings)
+	return write(cfg)

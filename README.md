@@ -87,6 +87,20 @@ Unknown setting names are rejected rather than stored, so a typo can't sit in
 your config being silently ignored. From then on, working in a directory of your own
 `CN-` prefixed samples, the tools pick it up automatically:
 
+### One shared library for everyone
+
+`--global` writes `[defaults]` instead of one person's profile, so a machine can
+be set up once and used without anyone passing `-u`:
+
+```bash
+achdiff profile set --global cif_loc="D:\Workfolder\Shared\CIF_LOC"
+achdiff profile unset --global cif_loc     # back to the built-in
+```
+
+Profiles still win over it, so someone with their own library keeps it and
+everyone else falls back to the shared one.
+
+
 ```
 $ pp -s -c
 [*] Profile: CN  (from sample-name prefix)

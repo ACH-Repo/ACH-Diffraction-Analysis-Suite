@@ -440,9 +440,14 @@ def _coerce(key, raw):
 
 
 def cmd_profile_set(args):
-	user = _require_user(args)
-	if not user:
-		return 1
+	# --global writes [defaults], which everyone falls back to, so it is the one
+	# form that must not ask whose profile this is.
+	if args.is_global:
+		user = None
+	else:
+		user = _require_user(args)
+		if not user:
+			return 1
 
 	known = sorted(config.BUILTIN_DEFAULTS)
 	settings = {}
@@ -467,8 +472,12 @@ def cmd_profile_set(args):
 		print(f'[!] Give at least one setting, e.g. cif_loc="D:\\path\\to\\CIFs"')
 		return 1
 
-	path = config.save_profile(user, settings)
-	print(f'[+] Profile {user} updated:')
+	if user:
+		path = config.save_profile(user, settings)
+		print(f'[+] Profile {user} updated:')
+	else:
+		path = config.save_defaults(settings)
+		print('[+] Global defaults updated (used by anyone without their own value):')
 	for k, v in sorted(settings.items()):
 		print(f'      {k} = {v!r}')
 	print(f'    -> {path}')
@@ -479,20 +488,30 @@ def cmd_profile_set(args):
 
 
 def cmd_profile_unset(args):
-	user = _require_user(args)
-	if not user:
-		return 1
 	cfg = config.load()
-	prof = cfg.get('profiles', {}).get(user, {})
-	missing = [k for k in args.keys if k not in prof]
+
+	if args.is_global:
+		user, table = None, cfg.get('defaults', {})
+	else:
+		user = _require_user(args)
+		if not user:
+			return 1
+		table = cfg.get('profiles', {}).get(user, {})
+
+	missing = [k for k in args.keys if k not in table]
 	if missing:
-		print(f'[!] {user} has no setting(s): {", ".join(missing)}')
+		owner = 'The global defaults have' if user is None else f'{user} has'
+		print(f'[!] {owner} no setting(s): {", ".join(missing)}')
 		return 1
 	for k in args.keys:
-		del prof[k]
+		del table[k]
 	config.write(cfg)
-	print(f'[+] Removed {", ".join(args.keys)} from {user}; '
-	      f'they fall back to defaults again.')
+	if user:
+		print(f'[+] Removed {", ".join(args.keys)} from {user}; '
+		      f'they fall back to defaults again.')
+	else:
+		print(f'[+] Removed {", ".join(args.keys)} from the global defaults; '
+		      f'the built-in values apply again.')
 	return 0
 
 
@@ -509,7 +528,9 @@ def cmd_profile_list(args):
 		print()
 	if not ids:
 		print('No profiles registered. Register one with, e.g.:')
-		print(r'  pp -u CN --cif-loc "D:\path\to\your\CIFs" --save-profile')
+		print(r'  achdiff profile set -u CN cif_loc="D:\path\to\your\CIFs"')
+		print('Or set one library for everyone, so nobody needs -u:')
+		print(r'  achdiff profile set --global cif_loc="D:\path\to\shared\CIFs"')
 		return 0
 	print('Registered profiles (these are the IDs that filename inference will match):')
 	for pid in ids:
@@ -608,14 +629,20 @@ def _build_parser():
 	p_ls.set_defaults(func=cmd_profile_list)
 
 	p_set = _with_user(prof_sub.add_parser(
-		'set', help='Register or update settings for a person.'))
+		'set', help='Register or update settings for a person, or for everyone.'))
 	p_set.add_argument('assignments', nargs='+', metavar='KEY=VALUE',
 	                   help='e.g. cif_loc="D:\\Workfolder\\you\\CIF_LOC" qall=true')
+	p_set.add_argument('--global', dest='is_global', action='store_true',
+	                   help='Write [defaults] instead of one person\'s profile: the '
+	                        'value everyone gets without passing -u. A profile that '
+	                        'sets the same key still wins for that person.')
 	p_set.set_defaults(func=cmd_profile_set)
 
 	p_unset = _with_user(prof_sub.add_parser(
 		'unset', help='Drop settings so they fall back to defaults.'))
 	p_unset.add_argument('keys', nargs='+', metavar='KEY')
+	p_unset.add_argument('--global', dest='is_global', action='store_true',
+	                     help='Drop from [defaults] rather than from a person.')
 	p_unset.set_defaults(func=cmd_profile_unset)
 
 	conf = sub.add_parser('config', help='Locate the configuration file.')
