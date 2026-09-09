@@ -50,6 +50,7 @@ except ImportError:
 	find_peaks = None
 
 from .. import config, identity
+from ..core import bruker
 from ..progname import prog_name
 
 
@@ -183,22 +184,9 @@ def read_dat(path):
 
 
 def read_raw(path):
-	TC_PATH = r"C:\TOPAS7\tc.exe"
-	TOPAS_INP = 'temptemptemp.inp'
-	TOPAS_FS = 'xdd "%s.raw"\n\tOut_X_Yobs("temptemptemp.xy")'
-	name = Path(path).stem
-	with open(TOPAS_INP, 'w', encoding='utf8') as outf:
-		outf.write(TOPAS_FS % name)
-	print('RUNNING CONVERSION:   %s.raw -> temptemptemp.xy' % name)
-	os.system('%s %s' % (TC_PATH, TOPAS_INP))
-	stem = Path(TOPAS_INP).stem
-	x, y = read_xy(stem + '.xy')
-	for ext in ('.inp', '.out', '.xy'):
-		try:
-			os.remove(stem + ext)
-		except OSError:
-			pass
-	return x, y
+	"""Bruker .raw (RAW1.01) read natively -- see ``core.bruker``. No TOPAS
+	conversion step, so prefitting works on a machine without TOPAS."""
+	return bruker.read_raw(path)
 
 
 READERS = {

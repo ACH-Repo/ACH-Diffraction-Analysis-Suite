@@ -1,6 +1,7 @@
 """Plot PXRD data files of various formats stacked on a single axis.
 
-Supports: .xy, .txt, .csv, .dat (Riet7), .raw (via TOPAS7), .brml (Bruker), .cif (simulated).
+Supports: .xy, .txt, .csv, .dat (Riet7), .raw (Bruker RAW1.01, native),
+.brml (Bruker), .cif (simulated).
 """
 
 import re
@@ -19,6 +20,7 @@ from matplotlib.transforms import blended_transform_factory
 
 from .. import config, identity
 from ..core import cif as cifcore
+from ..core import bruker
 from ..progname import prog_name
 
 
@@ -220,28 +222,12 @@ def read_xy(path):
 
 
 def read_raw(path):
-	"""Convert a Bruker .raw file to .xy via TOPAS7 tc.exe, then read it in."""
-	TC_PATH = r"C:\TOPAS7\tc.exe"
-	TOPAS_INP = 'temptemptemp.inp'
-	TOPAS_FS = 'xdd "%s.raw"\n\tOut_X_Yobs("temptemptemp.xy")'
+	"""Bruker .raw (RAW1.01) read natively -- see ``core.bruker``.
 
-	name = Path(path).stem
-	with open(TOPAS_INP, 'w', encoding='utf8') as outf:
-		outf.write(TOPAS_FS % name)
-
-	vprint('RUNNING CONVERSION:   %s.raw to temptemptemp.xy' % name)
-	os.system('%s %s' % (TC_PATH, TOPAS_INP))
-
-	stem = Path(TOPAS_INP).stem
-	x, y = read_xy(stem + '.xy')
-
-	for ext in ('.inp', '.out', '.xy'):
-		try:
-			os.remove(stem + ext)
-		except OSError:
-			pass
-
-	return x, y
+	Previously this shelled out to TOPAS7 tc.exe to convert the file to .xy,
+	which made plotting depend on a licensed local install. The native reader
+	is byte-for-byte equivalent (verified against PowDLL's RIET7 export)."""
+	return bruker.read_raw(path, verbose=args.verbose)
 
 
 def read_brml(path):
