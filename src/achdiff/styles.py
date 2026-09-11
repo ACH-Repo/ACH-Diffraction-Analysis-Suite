@@ -56,6 +56,10 @@ SCHEMA = [
 		    'Save with a transparent background instead of white.'),
 		Key('extension', 'extension', 'str',
 		    'Default output format for -s. The -x flag still overrides this.'),
+		Key('gif_dpi', 'gif_dpi', 'int',
+		    'Frame resolution for --gif. Kept apart from dpi, which is print '
+		    'resolution: a 6-inch figure at 300 dpi is 1800 px per frame, and a '
+		    'few dozen of those make a GIF too large to send anywhere.'),
 	]),
 	('traces', 'The curves themselves. Colours take any matplotlib spelling: '
 	           "'k', 'red', '#e8000b'.", [

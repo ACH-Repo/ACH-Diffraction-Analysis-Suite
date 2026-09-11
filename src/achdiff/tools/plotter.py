@@ -12,6 +12,7 @@ from matplotlib.ticker import AutoMinorLocator
 from matplotlib.transforms import blended_transform_factory
 
 from .. import config, identity, styles
+from ..core import animate
 from ..progname import prog_name
 from ..core.rounding import cryst_round, split_value_bracket
 from ..core import cif as cifcore
@@ -81,6 +82,10 @@ settings = {
 	# its own space group and substance, which is the historic behaviour.
 	'bragg_label': '',
 	'quality_fontsize': 12,
+	# Frame resolution for --gif. Separate from `dpi`, which is print
+	# resolution: a 6-inch figure at 300 dpi is 1800 px per frame, and fifty
+	# of those make a GIF nobody can email.
+	'gif_dpi': 150,
 
 	# VERTICAL LAYOUT CONTROLS (all values are axes-coordinate fractions, 0–1)
 	'bragg_spacing': 0.01,          # Gap between multiple Bragg tick rows
@@ -158,6 +163,24 @@ def _build_parser():
 	parser.add_argument('--cif-loc', dest='cif_loc', default=None,
 	                    help='CIF library directory for -r. Overrides the CIF_LOC env '
 	                         'var and any saved profile.')
+	parser.add_argument('--gif', action='store_true',
+	                    help='Animate every fit in this directory, in order, as one '
+	                         'GIF -- plus a second GIF of the cell parameters as bars '
+	                         'that change with it. For sequential refinements: a '
+	                         'variable-temperature or time-resolved run is only worth '
+	                         'anything next to itself. Implies -s.')
+	parser.add_argument('--gif-delay', type=int, default=animate.DEFAULT_DELAY_MS,
+	                    metavar='MS',
+	                    help='Milliseconds each frame is held (default: %(default)s).')
+	parser.add_argument('--gif-absolute', action='store_true',
+	                    help='Draw the cell bars as the parameters themselves rather '
+	                         'than as their change since the first fit. Reads more '
+	                         'naturally, but hides the motion: a and c can sit 3 A '
+	                         'apart while each moves 0.05 A, and an axis wide enough '
+	                         'for both is far too coarse to show either one move.')
+	parser.add_argument('--gif-name', default=None, metavar='NAME',
+	                    help='Stem for the GIF filenames. Defaults to the name of the '
+	                         'directory being animated.')
 	parser.add_argument('--style', default=None, metavar='FILE',
 	                    help='Style sheet to layer on top of the one -u already '
 	                         'selects. Use it for a one-off look -- a journal\'s '
@@ -644,7 +667,36 @@ def _extract_cell_parts(label, raw_string):
 
 
 def get_unit_cell_info(path):
+	"""Cell parameters rounded for display: [(sg_raw, [(label, main, bracket)]), ...].
+
+	The rounding half of `get_unit_cell_raw`, which does the parsing. Split
+	because the two callers want different things from the same text: an info box
+	wants `15.484(2)` to print, while an error bar wants 15.484 and 0.002 back as
+	numbers, and rounding to a string throws exactly that away.
+	"""
+	out = []
+	for sg_raw, cell_raw in get_unit_cell_raw(path):
+		cell_data = []
+		for label, token in cell_raw:
+			try:
+				parts = _extract_cell_parts(label, token)
+			except Exception as e:
+				print(f"Warning: skipping cell param '{label}' (couldn't parse '{token}'): {e}")
+				parts = None
+			if parts:
+				cell_data.append(parts)
+		out.append((sg_raw, cell_data))
+	return out
+
+
+def get_unit_cell_raw(path):
 	"""Parse cell parameters, volume, and space group from a TOPAS .out file.
+
+	Returns [(raw_sg_token, [(label, raw_token), ...]), ...], one entry per phase
+	in the order the file declares them, with the TOPAS tokens untouched --
+	``15.484`_0.002`` -- so a caller can round them or read the uncertainty out
+	of them as it needs.
+
 	Handles:
 	  - Commented-out template lines (leading `'`) — ignored
 	  - Single-line crystal-system macros: `Cubic(a)`, `Tetragonal(a, c)`,
@@ -656,9 +708,8 @@ def get_unit_cell_info(path):
 	  - Space-group syntaxes: quoted numeric `"61"`, quoted HM `"P63/mmc"`,
 	    quoted lowercase `"p1"`, unquoted `Pbca`, hyphenated `R-3`
 
-	Returns a list of (raw_sg_token, cell_data) tuples, one per phase, in the
-	order the .out file declares them. raw_sg_token may be either a number string
-	or an HM symbol; downstream callers should pass it through `resolve_sg`.
+	raw_sg_token may be either a number string or an HM symbol; downstream callers
+	should pass it through `resolve_sg`.
 	"""
 	if not os.path.exists(path):
 		return []
@@ -688,8 +739,14 @@ def get_unit_cell_info(path):
 	# Loose per-line declarations. The leading word boundary keeps `a` from
 	# matching `al`, `axial`, etc.; the (?:[a-zA-Z@]+\s+)* skips tokens like
 	# `@` or `lpa` between the key and the numeric value.
+	#
+	# The angle labels are the LaTeX names, matching the macro branch below. They
+	# used to be the plain words here, which meant the same file produced `\alpha`
+	# or `alpha` depending only on how its cell happened to be written -- and the
+	# info box renders its labels as mathtext, so the loose form came out as an
+	# italic "alpha" instead of a Greek letter.
 	loose_param_keys = (('a', 'a'), ('b', 'b'), ('c', 'c'),
-	                    ('alpha', 'al'), ('beta', 'be'), ('gamma', 'ga'))
+	                    (r'\alpha', 'al'), (r'\beta', 'be'), (r'\gamma', 'ga'))
 
 	phases_data = []
 
@@ -704,7 +761,7 @@ def get_unit_cell_info(path):
 		       or re.search(r'space_group\s+(\S+)', block)
 		sg_raw = sg_m.group(1).strip() if sg_m else None
 
-		cell_data = []
+		cell_raw = []
 
 		# 1. Try the crystal-system macro form
 		sys_m = macro_pat.search(block)
@@ -725,38 +782,20 @@ def get_unit_cell_info(path):
 			else:
 				labels = [f'p{i+1}' for i in range(n_params)]
 			for label, token in zip(labels, raw_tokens):
-				try:
-					parts = _extract_cell_parts(label, token)
-				except Exception as e:
-					print(f"Warning: skipping cell param '{label}' (couldn't parse '{token}'): {e}")
-					parts = None
-				if parts:
-					cell_data.append(parts)
+				cell_raw.append((label, token))
 		else:
 			# 2. Loose per-line declarations
 			for label, key in loose_param_keys:
 				pat = rf'^\s*{key}\b\s+(?:[a-zA-Z@]+\s+)*(\S+)'
 				m = re.search(pat, block, re.MULTILINE)
 				if m:
-					try:
-						parts = _extract_cell_parts(label, m.group(1))
-					except Exception as e:
-						print(f"Warning: skipping cell param '{label}' (couldn't parse '{m.group(1)}'): {e}")
-						parts = None
-					if parts:
-						cell_data.append(parts)
+					cell_raw.append((label, m.group(1)))
 
 		# 3. Volume (one per phase, by document order)
 		if phase_idx < len(all_vols):
-			try:
-				parts = _extract_cell_parts('V', all_vols[phase_idx])
-			except Exception as e:
-				print(f"Warning: skipping volume (couldn't parse '{all_vols[phase_idx]}'): {e}")
-				parts = None
-			if parts:
-				cell_data.append(parts)
+			cell_raw.append(('V', all_vols[phase_idx]))
 
-		phases_data.append((sg_raw, cell_data))
+		phases_data.append((sg_raw, cell_raw))
 
 	return phases_data
 
@@ -806,13 +845,21 @@ def stack_artists_vertically(ax, N_lines,
                              y_tol_bottom=settings['y_tol_bottom'],
                              d_difference=settings['difference_band_height'],
                              min_data_fraction=settings['min_data_fraction'],
-                             diff_shift_factor=settings['diff_shift_factor']):
+                             diff_shift_factor=settings['diff_shift_factor'],
+                             common_scale=None):
 	"""
 	Positions Bragg tick rows and the difference curve using axes-coordinate fractions
 	so the layout is invariant to data amplitude (e.g. range multiplications).
 
 	Layout from top to bottom (axes coords, 0 = bottom edge, 1 = top edge):
 	  y_tol_top | data region | top_clearance | tick rows | bottom_clearance | difference | y_tol_bottom
+
+	`common_scale` is `(y_min, y_max, diff_amplitude)` taken across a whole series
+	instead of from this fit alone. Without it every frame of an animation is
+	scaled to its own maximum, so a peak that halves and an axis that halves with
+	it look exactly alike -- the one thing a sequential experiment is being filmed
+	to show. Passing it makes the intensities comparable from frame to frame and
+	holds the tick rows and the difference band at one height throughout.
 	"""
 	try:
 		fig = ax.figure
@@ -836,6 +883,8 @@ def stack_artists_vertically(ax, N_lines,
 		y1 = ax.lines[1].get_ydata()
 		y_data_min = min(y0.min(), y1.min())
 		y_data_max = max(y0.max(), y1.max())
+		if common_scale is not None:
+			y_data_min, y_data_max = float(common_scale[0]), float(common_scale[1])
 		dy_data = y_data_max - y_data_min
 		if dy_data == 0:
 			return
@@ -846,6 +895,10 @@ def stack_artists_vertically(ax, N_lines,
 		diff_line = ax.lines[N_lines - 1]
 		y_diff = diff_line.get_ydata()
 		diff_amplitude = float(y_diff.max() - y_diff.min())
+		if common_scale is not None:
+			# The band is sized for the worst difference curve in the series, so it
+			# does not grow and shrink under a curve that is meant to be compared.
+			diff_amplitude = float(common_scale[2])
 
 		# Everything except the data region and the diff band is fixed
 		fixed_non_diff = (y_tol_top + y_tol_bottom + bottom_clearance
@@ -1348,6 +1401,102 @@ def _bragg_labels(tick_meta):
 	return [f"{fixed} ({tick['substance'] or tick['label']})" for tick in tick_meta]
 
 
+def _series_scale(group_names, file_dicts):
+	"""`(y_min, y_max, max_diff_amplitude)` over every fit in the series.
+
+	Read straight from the data files before any plotting, because the scale has
+	to be known before the first frame is drawn. Returns None if nothing could be
+	read, in which case each frame falls back to scaling itself and the animation
+	is no worse than it would have been.
+	"""
+	lows, highs, amplitudes = [], [], []
+	for group_name in group_names:
+		group_dict = file_dicts[group_name]
+		if len(group_dict) < 3:
+			continue
+		sorted_filegroup = sort_filegroup(group_dict)
+		exp_file = _pick_by_ident(sorted_filegroup, settings['X_Yobs_ident'])
+		calc_file = _pick_by_ident(sorted_filegroup, settings['Out_X_Ycalc_ident'])
+		dif_file = _pick_by_ident(sorted_filegroup, settings['X_Difference_ident'])
+		if not (exp_file and calc_file and dif_file):
+			continue
+		try:
+			for path in (exp_file[1], calc_file[1]):
+				_x, y = get_x_y(path)
+				lows.append(float(np.min(y)))
+				highs.append(float(np.max(y)))
+			_x, y_diff = get_x_y(dif_file[1])
+			amplitudes.append(float(np.max(y_diff) - np.min(y_diff)))
+		except Exception as e:
+			print(f'[!] {group_name}: could not pre-read for the common scale ({e}).')
+			continue
+
+	if not lows:
+		return None
+	return min(lows), max(highs), max(amplitudes or [0.0])
+
+
+def _collect_cell_series(cell_series, group_name, outfile_path, tick_meta):
+	"""Record this fit's cell parameters into a per-phase series.
+
+	Keyed by phase ordinal rather than by name: a phase's substance can be
+	missing from one .out in a run and present in the next, and a series that
+	split in two halfway through would animate as two half-length GIFs.
+	"""
+	if not outfile_path:
+		return
+	names = {}
+	for tick in tick_meta:
+		if tick['phase_i'] is not None and tick['phase_i'] not in names:
+			names[tick['phase_i']] = tick['substance'] or tick['label']
+
+	for phase_i, (_sg_raw, cell_raw) in enumerate(get_unit_cell_raw(outfile_path)):
+		params = {label: token for label, token in cell_raw
+		          if label in animate.CELL_KEYS}
+		if not params:
+			continue
+		series = cell_series.get(phase_i)
+		if series is None:
+			series = animate.CellSeries(names.get(phase_i, f'phase {phase_i + 1}'))
+			cell_series[phase_i] = series
+		series.add(group_name, params)
+
+
+def _write_gifs(frames, cell_series, stem, delay_ms, relative=True):
+	"""Write the fit animation and one cell animation per phase."""
+	stem = stem or Path(os.path.abspath(settings['start_dir'])).name or 'fits'
+
+	if not frames:
+		print('[!] No fits to animate.')
+		return
+	if len(frames) < 2:
+		print('[!] Only one fit here, so there is nothing to animate. '
+		      'Use -s for a single plot.')
+		return
+
+	fits_path = f'{stem}-fits.gif'
+	animate.write_gif(frames, fits_path, delay_ms=delay_ms)
+	print(f'[+] {fits_path}  ({len(frames)} frames, {delay_ms} ms each)')
+
+	multi = len(cell_series) > 1
+	for phase_i in sorted(cell_series):
+		series = cell_series[phase_i]
+		if len(series) < 2:
+			print(f'[!] {series.name}: only {len(series)} fit(s) carried cell '
+			      f'parameters, so no cell animation was written.')
+			continue
+		cell_frames = animate.render_cell_frames(
+			series, figsize=settings['figsize'], dpi=settings['gif_dpi'],
+			title=series.name if multi else None, relative=relative)
+		if not cell_frames:
+			continue
+		suffix = f'-cell-p{phase_i + 1}' if multi else '-cell'
+		cell_path = f'{stem}{suffix}.gif'
+		animate.write_gif(cell_frames, cell_path, delay_ms=delay_ms)
+		print(f'[+] {cell_path}  ({len(cell_frames)} frames, '
+		      f'{", ".join(k.lstrip(chr(92)) for k in series.keys())})')
+
+
 def main():
 	global args
 	args = _build_parser().parse_known_args()[0]
@@ -1393,7 +1542,22 @@ def main():
 	file_dicts = get_file_dicts()
 	all_out_files = glob('*.out')
 
-	for group_name in file_dicts:
+	# Natural order, so scan_2 comes before scan_10. It matters most for --gif,
+	# where the order is the timeline, but a batch that saves or shows its plots
+	# out of numerical order was never what anyone wanted either.
+	group_names = sorted(file_dicts, key=animate.natural_key)
+
+	# An animation has to be scaled to the whole series before its first frame is
+	# drawn, so the data is read once up front. Cheap next to the plotting, and it
+	# is the only way the frames can be comparable to each other.
+	common_scale = None
+	gif_frames = []
+	cell_series = {}
+	if args.gif:
+		args.silent = True
+		common_scale = _series_scale(group_names, file_dicts)
+
+	for group_name in group_names:
 		group_dict = file_dicts[group_name]
 		if len(group_dict) < 3:
 			continue
@@ -1521,7 +1685,7 @@ def main():
 		N_files = 2 + len(pos_files) + 1  # exp + calc + Bragg rows + diff
 		if args.multiply:
 			process_multiplication(ax, args.multiply)
-		stack_artists_vertically(ax, N_files)
+		stack_artists_vertically(ax, N_files, common_scale=common_scale)
 		# Reflection overlay goes in after both of the above and before the legend:
 		# process_multiplication reaches the difference curve as ax.lines[-1], so any
 		# axvline appended earlier would silently retarget it, and add_legend builds its
@@ -1542,13 +1706,24 @@ def main():
 			add_unit_cell_boxes(ax, ordered_phases, ordered_box_colors)
 		style(ax)
 
-		if args.silent:
+		if args.gif:
+			# No bbox_inches='tight' here, unlike the saved-file path: tight crops
+			# to the artists, so a frame whose labels are a character wider comes
+			# out a different size and the GIF cannot be assembled at all.
+			gif_frames.append(animate.figure_to_frame(fig, dpi=settings['gif_dpi']))
+			_collect_cell_series(cell_series, group_name, outfile_path, tick_meta)
+			plt.close(fig)
+		elif args.silent:
 			outfile_name = f"{group_name}.{settings['extension']}"
 			plt.savefig(outfile_name, dpi=settings['dpi'], bbox_inches='tight',
 			            transparent=settings['transparent'])
 			plt.close(fig)
 		else:
 			plt.show()
+
+	if args.gif:
+		_write_gifs(gif_frames, cell_series, args.gif_name, args.gif_delay,
+		            relative=not args.gif_absolute)
 
 
 if __name__ == '__main__':

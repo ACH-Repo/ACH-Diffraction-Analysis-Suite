@@ -211,6 +211,7 @@ their own. `--style` layers a one-off on top without editing yours:
 
 ```bash
 pp -s --style narrow-column          # same look, journal column width
+pp --gif --gif-delay 250             # animate a whole sequential run
 ```
 
 A bare name is looked up in the styles directory, so one-off styles can live
@@ -345,6 +346,38 @@ reflections from phases that are *not* in the fit — the Bragg tick rows come
 from TOPAS's own `2Th_Ip` files, so this is the complementary check for whether
 an unexplained feature belongs to a suspected impurity.
 
+#### Animating a sequential run
+
+A variable-temperature or time-resolved experiment leaves a directory of fits
+that only mean anything next to each other. `--gif` turns the directory into two
+animations for a talk:
+
+```bash
+pp --gif                    # <dir>-fits.gif and <dir>-cell.gif
+pp --gif --gif-delay 400    # slower
+pp --gif --gif-absolute     # cell bars as values, not as changes
+```
+
+`<dir>-fits.gif` is every fit in numerical order (`scan_2` before `scan_10`),
+**on one common intensity scale** — a peak that halves and an axis that halves
+with it look identical, so nothing is allowed to rescale between frames. The
+Bragg rows and the difference band hold their height throughout too.
+
+`<dir>-cell.gif` is the refined cell as bars that move with it: lengths on the
+left axis, angles on the right, a dashed rule between them, the refined value
+and its uncertainty printed above every bar and the esd drawn as an error bar.
+Multi-phase fits get one file per phase.
+
+By default the bars show the **change since the first fit**, not the value.
+A cell edge moves in the third decimal while a and c can sit 3 Å apart, so an
+axis wide enough to hold both is about a hundred times too coarse to show either
+one move — the absolute view is a row of bars that never visibly change.
+`--gif-absolute` gives that view if you want it; the printed numbers are the
+same either way.
+
+Frame resolution is the `gif_dpi` style setting (150 by default), kept apart from
+`dpi` so print output stays print quality without making a GIF nobody can email.
+
 ### `pq` — quickplot
 
 ```bash
@@ -432,6 +465,7 @@ src/achdiff/
 ├── core/
 │   ├── rounding.py      # crystallographic rounding (one copy)
 │   ├── cif.py           # CIF resolution + reflection simulation
+│   ├── animate.py       # GIFs of a sequential run
 │   └── _molom/          # vendored MoloM crystallography (do not edit)
 └── tools/               # one module per command
 ```

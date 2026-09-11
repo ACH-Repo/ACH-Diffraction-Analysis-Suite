@@ -566,6 +566,78 @@ check('a CIF with no atoms is an error, not an empty plot',
       _raises(lambda: cifcore.load_phase(_CIF_DIR / 'nope.cif')), True)
 
 
+
+# ---------- GIF animation of a sequential run ----------
+from achdiff.core import animate  # noqa: E402
+
+# A run is numbered, and plain string order plays the timeline out of sequence.
+check('frames sort numerically, not lexically',
+      sorted(['s_10', 's_2', 's_1'], key=animate.natural_key), ['s_1', 's_2', 's_10'])
+
+check('a TOPAS token splits into value and uncertainty',
+      animate.parse_value_error('15.475318`_0.000986'), (15.475318, 0.000986))
+check('diagnostics after the esd are not part of it',
+      animate.parse_value_error('7.38`_0.002`_LIMIT_MAX_9'), (7.38, 0.002))
+check('a value with no esd still gives a value',
+      animate.parse_value_error('90.0'), (90.0, None))
+check('an unparseable token is dropped rather than plotted as zero',
+      animate.parse_value_error('not a number'), None)
+
+# Cell edges as they actually come out of a sequential run: a and c nearly 3 A
+# apart, each moving by well under a tenth of an Angstrom.
+_series = animate.CellSeries('test')
+_series.add('run_1', {'a': '15.475`_0.001', 'c': '18.075`_0.001', r'\beta': '104.21`_0.003'})
+_series.add('run_2', {'a': '15.520`_0.002', 'c': '18.040`_0.002', r'\beta': '104.42`_0.003'})
+_series.add('run_3', {'a': '15.565`_0.004', r'\beta': '104.63`_0.003'})   # c missing here
+
+check('only parameters present in every frame are animated',
+      _series.keys(), ['a', r'\beta'])
+check('the baseline is the first frame',
+      _series.baselines(['a']), {'a': 15.475})
+
+# The whole reason relative mode exists: an axis wide enough to hold both a and
+# c is far too coarse to show either of them move.
+_lengths = ['a', 'c']
+_abs = _series.span(_lengths)
+_rel = _series.span(_lengths, _series.baselines(_lengths))
+check('absolute span has to cover both edges', _abs[0] < 15.475 and _abs[1] > 18.075, True)
+check('relative span is an order of magnitude tighter, which is the point',
+      (_rel[1] - _rel[0]) < (_abs[1] - _abs[0]) / 10, True)
+check('relative span brackets zero, so a shrinking parameter has somewhere to go',
+      _rel[0] < 0 < _rel[1], True)
+
+# Two axes on one plot do not share a scale; in relative mode their zeros must
+# still land at the same height or one grey rule is wrong for one of them.
+_a, _b = animate.align_zero((-0.067, 0.087), (-0.1, 0.5))
+_fa = -_a[0] / (_a[1] - _a[0])
+_fb = -_b[0] / (_b[1] - _b[0])
+check('aligned axes put zero at the same height', round(_fa - _fb, 12), 0.0)
+check('...without cropping either axis\'s own data',
+      (_a[0] <= -0.067 and _a[1] >= 0.087 and _b[0] <= -0.1 and _b[1] >= 0.5), True)
+check('a lone axis is left alone', animate.align_zero((-1.0, 2.0), None),
+      [(-1.0, 2.0), None])
+
+# Frames must all be one size or the GIF cannot be assembled; catching it here
+# beats a Pillow traceback after a minute of rendering.
+_frames = animate.render_cell_frames(_series, figsize=(4, 3), dpi=60)
+check('a frame is rendered per fit', len(_frames), 3)
+check('and every frame is the same size', len({f.size for f in _frames}), 1)
+
+_gif = Path(tempfile.mkdtemp()) / 'series.gif'
+animate.write_gif(_frames, _gif, delay_ms=120)
+check('the gif is written and holds every frame', _gif.is_file(), True)
+try:
+	from PIL import Image
+	with Image.open(_gif) as _im:
+		check('...as an animation, not a single image', _im.n_frames, 3)
+except ImportError:
+	pass
+
+check('mismatched frame sizes are refused with a reason',
+      _raises(lambda: animate.write_gif(
+          [_frames[0], _frames[0].resize((10, 10))], _gif)), True)
+
+
 print()
 print(f'{len(fails)} failure(s)' + (': ' + ', '.join(fails) if fails else ''))
 sys.exit(1 if fails else 0)
