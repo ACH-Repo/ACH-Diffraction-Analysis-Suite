@@ -22,7 +22,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
-from . import config
+from . import config, identity, styles
 
 # Tool name -> module implementing it. The keys are what a user names when
 # creating an alias; the built-in entry-point names are deliberately not used
@@ -548,6 +548,110 @@ def cmd_config_path(args):
 	return 0
 
 
+def _style_user(args):
+	"""Whose style sheet a `style` subcommand acts on.
+
+	Unlike trusted parameters, no profile is an answer rather than an error: the
+	styles directory has a `default.toml` that applies to everyone, and setting a
+	whole machine's look up once is a real use of it.
+	"""
+	user, _ = identity.resolve(args.user)
+	return user
+
+
+def cmd_style_path(args):
+	user = _style_user(args)
+	path = styles.style_path(user)
+	print(path)
+	if not path.exists():
+		who = f'profile {user}' if user else 'everyone (default.toml)'
+		print(f'(no style for {who} yet; `achdiff style init` writes one)')
+	return 0
+
+
+def cmd_style_list(args):
+	found = styles.available()
+	print(f'Styles: {styles.styles_dir()}')
+	print()
+	if not found:
+		print('No style sheets yet. Write a fully commented one with:')
+		print('  achdiff style init -u CN        for one person')
+		print('  achdiff style init              for everyone on this machine')
+		return 0
+	roster = set(config.profile_ids())
+	for stem, path in found:
+		if stem == styles.DEFAULT_STYLE_STEM:
+			note = 'applies to everyone, underneath any personal style'
+		elif stem in roster:
+			note = f'applies when -u resolves to {stem}'
+		else:
+			# Not an error -- a style may be written before its profile exists --
+			# but it is the likeliest reason a style "does nothing", so say it.
+			note = f'no profile {stem} is registered, so -u {stem} never resolves to it'
+		print(f'  {path.name:<16} {note}')
+	return 0
+
+
+def cmd_style_init(args):
+	user = _style_user(args)
+	path, created = styles.write_template(user, force=args.force)
+	if not created:
+		print(f'[!] {path} already exists.')
+		print('    Re-run with --force to replace it with a fresh template.')
+		return 1
+	who = f'profile {user}' if user else 'everyone without a style of their own'
+	print(f'[+] Wrote a style sheet for {who}:')
+	print(f'      {path}')
+	print('    Every setting is listed at its current value and commented out, so')
+	print('    nothing changes until you uncomment a line. Open it with:')
+	print('      achdiff style edit' + (f' -u {user}' if user else ''))
+
+	# A style is filed under a profile ID, but writing one does not create the
+	# profile -- and without the profile, filename inference has no roster to
+	# match against, so the style only ever applies when -u is typed out. That
+	# reads exactly like the style being ignored, so say it here rather than
+	# leaving it to be discovered.
+	if user and user not in config.profile_ids():
+		print()
+		print(f'[!] No profile {user} is registered yet, so the tools will only use')
+		print(f'    this style when you pass -u {user} explicitly. To have it picked')
+		print(f'    up from your sample-name prefixes as well, register the ID:')
+		print(f'      achdiff profile set -u {user} cif_loc="D:\\path\\to\\your\\CIFs"')
+	return 0
+
+
+def cmd_style_edit(args):
+	user = _style_user(args)
+	path, created = styles.write_template(user, force=False)
+	if created:
+		print(f'[+] Created {path}')
+
+	# EDITOR/VISUAL first: someone who has set one means it. Otherwise hand the
+	# file to whatever the desktop opens .toml with, which on these machines is
+	# Notepad and is exactly what a lab user expects a double-click to do.
+	editor = os.environ.get('VISUAL') or os.environ.get('EDITOR')
+	try:
+		if editor:
+			import shlex
+			import subprocess
+			# EDITOR routinely carries flags ("code -w"), so it is a command line
+			# rather than a filename. posix=False on Windows keeps the backslashes
+			# in C:\Program Files\... from being read as escapes; the quotes it
+			# leaves behind around a spaced path are stripped after the split.
+			parts = [p.strip('"') for p in shlex.split(editor, posix=(os.name != 'nt'))]
+			return subprocess.call(parts + [str(path)])
+		if hasattr(os, 'startfile'):
+			os.startfile(str(path))       # Windows only
+			return 0
+		import subprocess
+		return subprocess.call(['xdg-open' if sys.platform != 'darwin' else 'open',
+		                        str(path)])
+	except Exception as e:
+		print(f'[!] Could not open an editor ({e}). The file is at:')
+		print(f'      {path}')
+		return 1
+
+
 def _on_path(directory):
 	entries = os.environ.get('PATH', '').split(os.pathsep)
 	directory = str(directory).rstrip('\\/').lower()
@@ -644,6 +748,36 @@ def _build_parser():
 	p_unset.add_argument('--global', dest='is_global', action='store_true',
 	                     help='Drop from [defaults] rather than from a person.')
 	p_unset.set_defaults(func=cmd_profile_unset)
+
+	st = sub.add_parser('style', help='Your own plot style for pp.',
+	                    description='Style sheets are TOML files kept beside config.toml, '
+	                                'one per person, and are never touched by an upgrade. '
+	                                'Precedence: --style FILE > ACH_STYLE > '
+	                                'styles/<ID>.toml > styles/default.toml > built-in.')
+	st_sub = st.add_subparsers(dest='action', required=True)
+
+	def _with_style_user(p):
+		p.add_argument('-u', '--user', default=None, metavar='ID',
+		               help='Whose style to act on. Without it, the shared '
+		                    'default.toml that applies to everyone.')
+		return p
+
+	s_ls = st_sub.add_parser('list', help='Show the style sheets on this machine.')
+	s_ls.set_defaults(func=cmd_style_list)
+
+	s_path = _with_style_user(st_sub.add_parser('path', help='Print a style file path.'))
+	s_path.set_defaults(func=cmd_style_path)
+
+	s_init = _with_style_user(st_sub.add_parser(
+		'init', help='Write a commented style sheet listing every setting.'))
+	s_init.add_argument('--force', action='store_true',
+	                    help='Replace an existing style sheet with a fresh template. '
+	                         'This discards whatever you had changed in it.')
+	s_init.set_defaults(func=cmd_style_init)
+
+	s_edit = _with_style_user(st_sub.add_parser(
+		'edit', help='Open a style sheet, creating it first if needed.'))
+	s_edit.set_defaults(func=cmd_style_edit)
 
 	conf = sub.add_parser('config', help='Locate the configuration file.')
 	conf_sub = conf.add_subparsers(dest='action', required=True)

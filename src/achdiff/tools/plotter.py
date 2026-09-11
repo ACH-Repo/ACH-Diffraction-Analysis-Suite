@@ -11,7 +11,7 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import AutoMinorLocator
 from matplotlib.transforms import blended_transform_factory
 
-from .. import config, identity
+from .. import config, identity, styles
 from ..progname import prog_name
 from ..core.rounding import cryst_round, split_value_bracket
 from ..core import cif as cifcore
@@ -50,10 +50,38 @@ settings = {
 	'title': None, 
 	'title_font_weight': 'bold', 
 	'title_font_size': 12, 
-	'show_info': True, 
-	'use_sg_from_outfile': True, 
-	'use_sg_format': 'HERMANN-MAUGUIN+SUBSTANCE', 
-	
+	'show_info': True,
+	'use_sg_from_outfile': True,
+	'use_sg_format': 'HERMANN-MAUGUIN+SUBSTANCE',
+
+	# PRESENTATION (everything a style sheet is allowed to reach -- see styles.py).
+	# These used to be literals inside style(), add_legend() and the plot calls in
+	# main(), which is why a per-person look was impossible without editing the
+	# package. The values below reproduce that original look exactly.
+	'X_Yobs_markeredgewidth': .6,    # stroke weight of the 'x' symbols
+	'Out_X_Ycalc_linewidth': 1,
+	'X_Difference_linewidth': .3,
+	'2Th_Ip_markeredgewidth': .6,
+	'x_label_text': r'$2\theta \quad / \quad \mathrm{^\circ}$',
+	'y_label_text': r'$\mathrm{Intensity} \quad / \quad \mathrm{a.u.}$',
+	'size_axis_labels': 11,
+	'size_tick_labels': 10,
+	'ticks_top': False,             # mirror the x ticks onto the top edge
+	'tick_direction': 'in',
+	# Taken from the live rcParams rather than hardcoded, so that leaving these
+	# alone means "whatever matplotlib would have done", exactly as before.
+	'tick_length_major': plt.rcParams['xtick.major.size'],
+	'tick_length_minor': plt.rcParams['xtick.minor.size'],
+	'show_legend': True,
+	'legend_loc': 'upper right',
+	'legend_frame': True,
+	'legend_columns': 1,
+	'legend_dedupe': True,          # collapse entries identical in wording AND appearance
+	# One fixed name for every Bragg row. Empty means each row names itself from
+	# its own space group and substance, which is the historic behaviour.
+	'bragg_label': '',
+	'quality_fontsize': 12,
+
 	# VERTICAL LAYOUT CONTROLS (all values are axes-coordinate fractions, 0–1)
 	'bragg_spacing': 0.01,          # Gap between multiple Bragg tick rows
 	'tick_top_clearance': 0.02,     # Gap between data floor and the topmost Bragg tick row
@@ -92,34 +120,15 @@ settings = {
 	'reflection_alpha': 0.75,
 }
 
+# Argument-parser defaults only. This table used to carry a second, parallel copy
+# of the presentation values -- colours, label text, font sizes -- that nothing
+# ever read: style() and main() used their own literals, so editing
+# `defaults['y_label_text']` changed nothing and only misled whoever tried. The
+# presentation keys now live in `settings` above, where they are read, and this
+# is reduced to the two values argparse genuinely needs.
 defaults = {
-	'input': 'AUTOBATCH', 
-	'silent': False, 
-	'opaque': False, 
-	'multi_range': None,
-	'color_exp': 'k', 
-	'color_cal': 'r', 
-	'color_pos': 'b', 
-	'color_dif': 'g',
-	'marker_exp_size': 6, 
-	'marker_pos_size': 10, 
-	'plot_size': (6, 4), 
-	'dots_per_inch': 600, 
-	'extension': 'svg', 
-	'legend_text_exp': 'Observed', 
-	'legend_text_cal': 'Calculated', 
-	'legend_text_pos': 'Reflections', 
-	'legend_text_dif': 'Difference', 
-	'legend_columns': 1, 
-	'size_axis_labels': 11, 
-	'size_legend_labels': 12, 
-	'size_tick_labels': 10, 
-	'size_multiply_label': 12, 
-	'x_label_text': r'$2\theta \quad / \quad°$', 
-	'y_label_text': 'Intensity / a.u.', 
-	'x_step_width': 5, 
-	'vline_style': '-', 
-	'vline_strength': 0.6
+	'input': 'AUTOBATCH',
+	'silent': False,
 }
 
 def _build_parser():
@@ -130,8 +139,12 @@ def _build_parser():
 	parser.add_argument('-s', '--silent', action='store_true', default=defaults['silent'])
 	parser.add_argument('-c', '--cell_info', action='store_true', help='Include unit cell parameter boxes on the plot.')
 	parser.add_argument('-m', '--multiply', nargs='+', help='Format: a,b,N. Use ,b,N or a,,N for limits.')
-	parser.add_argument('-x', '--extension', type=str, default=settings['extension'],
-	                    help='Output image format used with -s, e.g. svg, png, pdf (default: %(default)s).')
+	# Default None rather than settings['extension']: argparse captures its default
+	# at parser-build time, so a concrete one here would be indistinguishable from
+	# a flag the user typed and would silently outrank a style sheet's `extension`.
+	parser.add_argument('-x', '--extension', type=str, default=None,
+	                    help='Output image format used with -s, e.g. svg, png, pdf '
+	                         '(default: %s).' % settings['extension'])
 	parser.add_argument('--qall', action='store_true',
 	                    help='Show all three fit-quality factors (R_wp, R_exp, chi) instead of R_wp alone.')
 	parser.add_argument('-r', '--reflections', default=None, type=str,
@@ -140,11 +153,16 @@ def _build_parser():
 	                         'N (count of strongest reflections) defaults to %d; color '
 	                         'defaults to a hue not used by the fit traces. Bare CIF names '
 	                         'resolve against cif_dir_path. Useful for checking an impurity '
-	                         'phase that is not part of the fit. Needs pymatgen.'
+	                         'phase that is not part of the fit.'
 	                         % settings['reflection_n_top'])
 	parser.add_argument('--cif-loc', dest='cif_loc', default=None,
 	                    help='CIF library directory for -r. Overrides the CIF_LOC env '
 	                         'var and any saved profile.')
+	parser.add_argument('--style', default=None, metavar='FILE',
+	                    help='Style sheet to layer on top of the one -u already '
+	                         'selects. Use it for a one-off look -- a journal\'s '
+	                         'column width, say -- without editing your own. See '
+	                         '`achdiff style --help`.')
 	identity.add_user_argument(parser)
 	return parser
 
@@ -957,26 +975,67 @@ def process_multiplication(ax, multi_args):
 
 
 def style(ax):
-	size_axis_labels = getattr(args, 'size_axis_labels', defaults['size_axis_labels'])
-	size_tick_labels = getattr(args, 'size_tick_labels', defaults['size_tick_labels'])
-
-	ax.set_xlabel(r'$2\theta \quad / \quad \mathrm{^\circ}$', size=size_axis_labels, labelpad=7)
-	ax.set_ylabel(r'$\mathrm{Intensity} \quad / \quad \mathrm{a.u.}$', size=size_axis_labels, labelpad=7)
+	ax.set_xlabel(settings['x_label_text'], size=settings['size_axis_labels'], labelpad=7)
+	ax.set_ylabel(settings['y_label_text'], size=settings['size_axis_labels'], labelpad=7)
+	# No y ticks: a Pawley fit's intensities are on an arbitrary scale, so numbering
+	# them would invite a reading they cannot support.
 	ax.set_yticks([])
 	ax.xaxis.set_minor_locator(AutoMinorLocator())
-	ax.tick_params(axis='both', which='both', labelsize=size_tick_labels, direction='in')
-	
+	ax.tick_params(axis='both', which='both',
+	               labelsize=settings['size_tick_labels'],
+	               direction=settings['tick_direction'],
+	               top=settings['ticks_top'])
+	ax.tick_params(axis='both', which='major', length=settings['tick_length_major'])
+	ax.tick_params(axis='both', which='minor', length=settings['tick_length_minor'])
+
 	if len(ax.lines) > 1:
 		xmin = ax.lines[1].get_xdata().min()
 		xmax = ax.lines[1].get_xdata().max()
 		ax.set_xlim(xmin, xmax)
 
 
-def add_legend(ax):
+def _legend_artists(ax):
+	"""The lines that should appear in the legend, in plot order.
+
+	With `legend_dedupe`, a line is dropped when an earlier one already says the
+	same thing *and* looks the same. Wording alone is not enough: a fixed
+	`bragg_label` names every tick row identically, and collapsing two rows drawn
+	in different colours would leave a colour in the plot that the key never
+	accounts for.
+	"""
 	visible = [l for l in ax.lines if not l.get_label().startswith('_')]
-	leg_lines = [Line2D([0], [0], marker=l.get_marker(), ms=l.get_ms(), ls=l.get_ls(), c=l.get_color(), lw=1) for l in visible]
+	if not settings['legend_dedupe']:
+		return visible
+
+	seen = set()
+	kept = []
+	for line in visible:
+		fingerprint = (line.get_label(), line.get_color(),
+		               line.get_marker(), line.get_linestyle())
+		if fingerprint in seen:
+			continue
+		seen.add(fingerprint)
+		kept.append(line)
+	return kept
+
+
+def add_legend(ax):
+	if not settings['show_legend']:
+		return
+	visible = _legend_artists(ax)
+	# Proxies rather than the artists themselves: a 0.3 pt difference curve is
+	# invisible at legend size, so the swatch is drawn at lw=1 regardless. Marker
+	# stroke weight *is* carried over, since that is a shape the reader matches
+	# against the plot rather than a hairline that vanishes.
+	leg_lines = [Line2D([0], [0], marker=l.get_marker(), ms=l.get_ms(),
+	                    mew=l.get_markeredgewidth(), ls=l.get_ls(),
+	                    c=l.get_color(), lw=1) for l in visible]
 	leg_labs = [l.get_label() for l in visible]
-	ax.legend(leg_lines, leg_labs, fontsize=settings['legend_fontsize'], frameon=True, loc='upper right')
+	ax.legend(leg_lines, leg_labs,
+	          fontsize=settings['legend_fontsize'],
+	          frameon=settings['legend_frame'],
+	          ncol=settings['legend_columns'],
+	          loc=settings['legend_loc'])
 
 
 def add_quality(ax, info, show_all=False):
@@ -1004,7 +1063,8 @@ def add_quality(ax, info, show_all=False):
 		return
 
 	text = '$' + r',\ '.join(parts) + '$'
-	ax.text(.99, .01, text, ha='right', va='bottom', size=12, style='italic', transform=ax.transAxes)
+	ax.text(.99, .01, text, ha='right', va='bottom',
+	        size=settings['quality_fontsize'], style='italic', transform=ax.transAxes)
 
 
 def _renderer(fig):
@@ -1266,16 +1326,55 @@ def _legend_label_for(canon_sg, hm_label, substance):
 	return settings['2Th_Ip_label'] if isinstance(settings['2Th_Ip_label'], str) else 'Reflections'
 
 
+def _bragg_labels(tick_meta):
+	"""Legend text for each Bragg tick row.
+
+	Without a fixed `bragg_label`, every row names itself after its own space group
+	and substance, which is the historic behaviour.
+
+	With one, the reader is being told these are all the same kind of thing -- so
+	while the rows are also drawn alike, one entry says it and `legend_dedupe`
+	collapses the repeats. The moment two rows differ in colour that stops being
+	true: there are now two things on the plot to tell apart, and a key that names
+	only one of them leaves the second colour unexplained. Each row therefore
+	keeps its phase in brackets, preferring the substance name over the space
+	group because that is what people actually call it.
+	"""
+	fixed = settings['bragg_label']
+	if not fixed:
+		return [tick['label'] for tick in tick_meta]
+	if len({tick['color'] for tick in tick_meta}) <= 1:
+		return [fixed] * len(tick_meta)
+	return [f"{fixed} ({tick['substance'] or tick['label']})" for tick in tick_meta]
+
+
 def main():
 	global args
 	args = _build_parser().parse_known_args()[0]
-	settings['extension'] = args.extension.lstrip('.').lower()
 
 	# Resolve the person, then their settings. Announced rather than silent: a
 	# wrong profile means a wrong CIF library, and that should never be invisible.
 	user, source = identity.resolve(args.user)
 	if args.user or user:
 		print(identity.describe(user, source))
+
+	# The style sheet goes on before anything is measured or drawn: several of its
+	# settings (figsize, marker sizes) feed the vertical layout, which would
+	# otherwise be computed against values the figure no longer uses. Announced
+	# for the same reason the profile is -- a figure that silently came out in
+	# someone else's house style is a figure you republish by accident.
+	try:
+		applied = styles.apply(settings, user=user, explicit=args.style)
+	except FileNotFoundError as e:
+		print(f'[!] {e}')
+		raise SystemExit(2)
+	if applied:
+		print(f'[*] Style: {applied}')
+
+	# Resolved after the style, so `extension` in a style sheet is honoured while
+	# an explicit -x still wins.
+	settings['extension'] = (args.extension or settings['extension']).lstrip('.').lower()
+
 	settings['cif_dir_path'] = config.get('cif_loc', cli_value=args.cif_loc, user=user)
 	# store_true can't distinguish "absent" from "off", so only an explicit --qall
 	# overrides the profile; without it the saved preference decides.
@@ -1366,12 +1465,13 @@ def main():
 				if phase_i is not None and phase_i < len(ordered_substances) else None
 
 			tick_meta.append({
-				'idx':     i,
-				'phase_i': phase_i,
-				'path':    path,
-				'color':   settings['2Th_Ip_colors'][i % len(settings['2Th_Ip_colors'])],
-				'sg_num':  canon_sg,
-				'label':   _legend_label_for(canon_sg, hm_label, substance),
+				'idx':       i,
+				'phase_i':   phase_i,
+				'path':      path,
+				'color':     settings['2Th_Ip_colors'][i % len(settings['2Th_Ip_colors'])],
+				'sg_num':    canon_sg,
+				'substance': substance,
+				'label':     _legend_label_for(canon_sg, hm_label, substance),
 			})
 
 		# Unit-cell boxes follow the same tick→phase ordinals, so each box appears in the
@@ -1385,31 +1485,36 @@ def main():
 				ordered_box_colors.append(tick['color'])
 
 		# Tick legend labels in (phase-ordered) pos_files order
-		settings['2Th_Ip_label'] = [tick['label'] for tick in tick_meta]
+		bragg_labels = _bragg_labels(tick_meta)
+		settings['2Th_Ip_label'] = bragg_labels
 
 		# ---- Plot the core artists ----
 		fig, ax = plt.subplots(figsize=settings['figsize'], layout='constrained')
 
 		# Trace 1: Observed
 		x, y = get_x_y(exp_file[1])
-		ax.plot(x, y, ls='', marker='x', mew=.6, color=settings['X_Yobs_color'],
+		ax.plot(x, y, ls='', marker='x', mew=settings['X_Yobs_markeredgewidth'],
+		        color=settings['X_Yobs_color'],
 		        label=settings['X_Yobs_label'], ms=settings['X_Yobs_markersize'])
 
 		# Trace 2: Calculated
 		x, y = get_x_y(calc_file[1])
-		ax.plot(x, y, ls='-', lw=1, marker='', color=settings['Out_X_Ycalc_color'],
+		ax.plot(x, y, ls='-', lw=settings['Out_X_Ycalc_linewidth'], marker='',
+		        color=settings['Out_X_Ycalc_color'],
 		        label=settings['Out_X_Ycalc_label'], ms=settings['Out_X_Ycalc_markersize'])
 
 		# Trace 3+: Bragg tick rows (one per phase)
 		for i, (ident, path) in enumerate(pos_files):
 			x, y = get_x_y(path)
-			ax.plot(x, np.zeros_like(x), ls='', marker='|', mew=.6,
-			        color=tick_meta[i]['color'], label=tick_meta[i]['label'],
+			ax.plot(x, np.zeros_like(x), ls='', marker='|',
+			        mew=settings['2Th_Ip_markeredgewidth'],
+			        color=tick_meta[i]['color'], label=bragg_labels[i],
 			        ms=settings['2Th_Ip_markersize'])
 
 		# Trace N: Difference
 		x, y = get_x_y(dif_file[1])
-		ax.plot(x, y, ls='-', marker='', lw=.3, color=settings['X_Difference_color'],
+		ax.plot(x, y, ls='-', marker='', lw=settings['X_Difference_linewidth'],
+		        color=settings['X_Difference_color'],
 		        label=settings['X_Difference_label'], ms=settings['X_Difference_markersize'])
 
 		# Layout, legend, optional decorations

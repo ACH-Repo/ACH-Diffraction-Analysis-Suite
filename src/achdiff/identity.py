@@ -18,6 +18,7 @@ The prefix pattern is roughly ``[A-Z]{2,3}-``, which also matches the material
 names this lab works on every day::
 
     CN-sample1_pawley_01_X_Yobs.txt  ->  CN    a person
+    CN_sample1_pawley_01_X_Yobs.txt  ->  CN    the same person, other separator
     ZIF-4_pawley_01_X_Yobs.txt       ->  ZIF   NOT a person
     MOF-5_ambient.xy                 ->  MOF   NOT a person
     MIL-101_run.xy                   ->  MIL   NOT a person
@@ -35,8 +36,14 @@ from glob import glob
 
 from . import config
 
-# Sample-name prefix: 2-3 capitals followed by a hyphen, at the start of the name.
-PREFIX_RE = re.compile(r'^([A-Z]{2,3})-')
+# Sample-name prefix: 2-3 capitals followed by a hyphen or an underscore, at the
+# start of the name. The underscore is there because people write both -- the
+# same sample turns up as CN-sample1.xy and CN_sample1.xy depending on who typed
+# it -- and accepting only one separator made inference look broken for half the
+# lab. Widening it is safe for the reason the roster guard below exists: a
+# prefix is adopted only when it is already a registered profile, so the extra
+# spelling can match more filenames but never more people.
+PREFIX_RE = re.compile(r'^([A-Z]{2,3})[-_]')
 
 ENV_USER = 'ACH_USER'
 
