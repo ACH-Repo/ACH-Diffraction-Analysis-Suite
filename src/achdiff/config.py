@@ -154,9 +154,19 @@ def _fmt_toml_value(value):
 		return 'true' if value else 'false'
 	if isinstance(value, (int, float)):
 		return str(value)
+	if isinstance(value, (list, tuple)):
+		return '[' + ', '.join(_fmt_toml_value(v) for v in value) + ']'
+
 	# Single-quoted TOML literal strings need no backslash escaping, which is
-	# exactly what Windows paths want.
-	return "'" + str(value).replace("'", "''") + "'"
+	# exactly what Windows paths want. They cannot hold an apostrophe at all
+	# though -- there is no escape for one inside a literal string, and doubling
+	# it (the old behaviour) just ends the string early and leaves the rest as a
+	# syntax error. A path like D:\Bob's data is not far-fetched, so a value with
+	# an apostrophe falls back to a basic string with its backslashes doubled.
+	text = str(value)
+	if "'" not in text:
+		return "'" + text + "'"
+	return '"' + text.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
 def trusted_params(user, cfg=None):
@@ -249,40 +259,59 @@ def write(cfg):
 
 	defaults = cfg.get('defaults', {})
 	if defaults:
-		lines.append('[defaults]')
-		for k, v in sorted(defaults.items()):
-			lines.append(f'{k} = {_fmt_toml_value(v)}')
-		lines.append('')
+		_emit_table(lines, ['defaults'], defaults)
 
 	aliases = cfg.get('aliases', {})
 	if aliases:
 		lines.append('# User-defined command shorthands, created by `achdiff alias set`.')
-		lines.append('[aliases]')
-		for k, v in sorted(aliases.items()):
-			lines.append(f'{k} = {_fmt_toml_value(v)}')
-		lines.append('')
+		_emit_table(lines, ['aliases'], aliases)
 
 	for pid in sorted(cfg.get('profiles', {})):
-		prof = cfg['profiles'][pid]
-		# Scalars first: a sub-table opened above them would swallow the rest of
-		# the profile's plain keys into itself.
-		scalars = {k: v for k, v in prof.items() if not isinstance(v, dict)}
-		lines.append(f'[profiles.{pid}]')
-		for k, v in sorted(scalars.items()):
-			lines.append(f'{k} = {_fmt_toml_value(v)}')
-		lines.append('')
-
-		trusted = prof.get('trusted', {})
-		if trusted:
-			for phase in sorted(trusted):
-				lines.append(f'[profiles.{pid}.trusted.{_fmt_toml_key(phase)}]')
-				for k, v in sorted(trusted[phase].items()):
-					lines.append(f'{k} = {_fmt_toml_value(v)}')
-				lines.append('')
+		_emit_table(lines, ['profiles', _fmt_toml_key(pid)], cfg['profiles'][pid])
 
 	path.parent.mkdir(parents=True, exist_ok=True)
 	path.write_text('\n'.join(lines), encoding='utf-8')
 	return path
+
+
+def _emit_table(lines, path, table, force_header=True):
+	"""Write `[path]` with its scalar keys, then recurse into its sub-tables.
+
+	Generic rather than a fixed list of the tables the tools happen to write
+	today. The old version emitted a profile's scalars and its `trusted` set and
+	nothing else, which meant any other sub-table -- one added by hand, or by a
+	later feature -- survived being read and then vanished at the next save,
+	silently and at the moment the rest of the file was being preserved. A dict
+	under [defaults] fared worse: it was passed to the value formatter and
+	written out as a quoted Python repr.
+
+	Scalars are emitted before any sub-table header, because a header opened
+	above them would swallow every remaining plain key into itself -- that is how
+	a profile's `cif_loc` would end up inside its trusted set.
+
+	Sub-tables holding nothing are skipped. `trusted = {}` and no trusted table
+	at all read back identically, so emitting a bare header for one would only
+	leave `[profiles.CN.trusted]` behind forever after the last phase is removed.
+
+	`force_header` keeps the top-level headers -- [defaults], [aliases],
+	[profiles.<ID>] -- even when everything under them lives in a sub-table, so
+	the roster stays readable at a glance. A purely intermediate table like
+	`trusted` gets no header of its own: TOML infers it from the phase tables
+	beneath, and printing it would add a bare line that says nothing.
+	"""
+	scalars = {k: v for k, v in table.items() if not isinstance(v, dict)}
+	subtables = {k: v for k, v in table.items() if isinstance(v, dict)}
+
+	if scalars or force_header or not subtables:
+		lines.append('[' + '.'.join(path) + ']')
+		for k, v in sorted(scalars.items()):
+			lines.append(f'{_fmt_toml_key(k)} = {_fmt_toml_value(v)}')
+		lines.append('')
+
+	for k in sorted(subtables):
+		if subtables[k]:
+			_emit_table(lines, path + [_fmt_toml_key(k)], subtables[k],
+			            force_header=False)
 
 
 def save_profile(user, settings):
