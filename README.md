@@ -175,6 +175,15 @@ achdiff style edit -u CN     # open it
 pp -s                        # every plot from now on is in your style
 ```
 
+Sent one by a colleague instead of writing your own? Install it in one step —
+it is checked before it is copied, so a typo in it is caught now rather than the
+next time you plot:
+
+```bash
+achdiff style install CN.toml -u CN
+achdiff style list                    # confirm it landed
+```
+
 `init` writes `%APPDATA%\ach-diffraction\styles\CN.toml` with every setting at
 the value currently in effect, each one commented out and explained. Uncomment
 what you want to own; anything left commented keeps following the built-in, so

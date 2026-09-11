@@ -265,6 +265,28 @@ def _read(path):
 	return flat
 
 
+def validate(path):
+	"""Check a style file without applying it: `(good, unknown, invalid)`.
+
+	`good` and `unknown` are key names, `invalid` is (name, reason) pairs. Used
+	before installing a file someone was sent, so a typo is caught while it is
+	still obvious what to do about it rather than the next time they plot.
+	"""
+	good, unknown, invalid = [], [], []
+	for name, raw in _read(path).items():
+		key = BY_NAME.get(name)
+		if key is None:
+			unknown.append(name)
+			continue
+		try:
+			_coerce(key, raw)
+		except ValueError as e:
+			invalid.append((name, str(e)))
+			continue
+		good.append(name)
+	return good, unknown, invalid
+
+
 def _apply_one(target, path, seen_unknown):
 	"""Layer one file onto `target`. Returns the number of settings applied."""
 	applied = 0

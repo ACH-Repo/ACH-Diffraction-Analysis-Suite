@@ -285,6 +285,18 @@ check('a bare name layers on top of the personal style',
 check('a name matching nothing comes back as typed, for the error to quote',
       styles.resolve_named_style('nope').name, 'nope')
 
+# `style install` checks a file before copying it, so a typo in something a
+# colleague sent is caught while it is still obvious what to do about it.
+_check_src = Path(tempfile.mkdtemp()) / 'sent.toml'
+_check_src.write_text("[axes]\ny_label = 'ok'\n"
+                      "legend_columsn = 2\n"
+                      "tick_direction = 'sideways'\n", encoding='utf-8')
+_good, _unknown, _invalid = styles.validate(_check_src)
+check('validate reports the keys that would apply', _good, ['y_label'])
+check('...the ones it does not know', _unknown, ['legend_columsn'])
+check('...and the ones it cannot use, with a reason',
+      [n for n, _reason in _invalid], ['tick_direction'])
+
 # `achdiff style init` writes the catalogue people edit. Every line in it must be
 # a key the loader knows and a value it accepts, or the first thing anyone
 # uncomments is a warning.

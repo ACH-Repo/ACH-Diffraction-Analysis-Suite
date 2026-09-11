@@ -620,6 +620,56 @@ def cmd_style_init(args):
 	return 0
 
 
+def cmd_style_install(args):
+	"""Put a style file someone sent you where the tools will find it."""
+	source = Path(args.file)
+	if not source.is_file():
+		print(f'[!] No such file: {source}')
+		return 1
+
+	user = _style_user(args)
+	target = styles.style_path(user)
+
+	if target.exists() and source.resolve() == target.resolve():
+		print(f'[+] {target} is already this file.')
+		return 0
+
+	# Check before copying, not after: a file that would have been ignored at
+	# plot time is much easier to think about while it is still the thing you
+	# just typed the name of.
+	good, unknown, invalid = styles.validate(source)
+	for name, reason in invalid:
+		print(f'[!] {source.name}: {name} -- {reason}.')
+	if unknown:
+		print(f'[!] {source.name}: unknown setting(s) {", ".join(sorted(unknown))}.')
+		print('    `achdiff style init` writes a file listing every setting there is.')
+	if not good and (unknown or invalid):
+		print('[!] Nothing in this file would be applied. Not installing it.')
+		return 1
+
+	if target.exists() and not args.force:
+		print(f'[!] {target} already exists.')
+		print('    Re-run with --force to replace it. Keep a copy first if you have')
+		print('    edited it -- the replacement is not merged with what is there.')
+		return 1
+
+	target.parent.mkdir(parents=True, exist_ok=True)
+	shutil.copyfile(str(source), str(target))
+
+	who = f'profile {user}' if user else 'everyone without a style of their own'
+	print(f'[+] Installed {source.name} as the style for {who}:')
+	print(f'      {target}')
+	print(f'    {len(good)} setting(s) will be applied.')
+
+	if user and user not in config.profile_ids():
+		print()
+		print(f'[!] No profile {user} is registered yet, so this style is only used')
+		print(f'    when you pass -u {user} explicitly. To have it picked up from')
+		print(f'    your sample-name prefixes as well, register the ID:')
+		print(f'      achdiff profile set -u {user} cif_loc="D:\\path\\to\\your\\CIFs"')
+	return 0
+
+
 def cmd_style_edit(args):
 	user = _style_user(args)
 	path, created = styles.write_template(user, force=False)
@@ -774,6 +824,14 @@ def _build_parser():
 	                    help='Replace an existing style sheet with a fresh template. '
 	                         'This discards whatever you had changed in it.')
 	s_init.set_defaults(func=cmd_style_init)
+
+	s_inst = _with_style_user(st_sub.add_parser(
+		'install', help='Install a style file someone sent you.'))
+	s_inst.add_argument('file', metavar='FILE', help='The .toml file to install.')
+	s_inst.add_argument('--force', action='store_true',
+	                    help='Replace an existing style sheet. The replacement is not '
+	                         'merged with it, so keep a copy if you have edited yours.')
+	s_inst.set_defaults(func=cmd_style_install)
 
 	s_edit = _with_style_user(st_sub.add_parser(
 		'edit', help='Open a style sheet, creating it first if needed.'))
