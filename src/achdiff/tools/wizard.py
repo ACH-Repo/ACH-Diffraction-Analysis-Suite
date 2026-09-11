@@ -19,13 +19,15 @@ from datetime import datetime, timezone
 from string import Template
 
 from .. import config, identity
+from ..core import cif as cifcore
 from ..progname import prog_name
 
 # Clear the screen helper to keep the interactive wizard clean
 def clear_terminal():
 	os.system('cls' if os.name == 'nt' else 'clear')
 
-# Suppress noisy external library warnings (e.g., from pymatgen)
+# Third-party UserWarnings would break up the wizard's step-by-step prompts.
+# CIF problems are not among them: core.cif reports those itself, as one line.
 warnings.filterwarnings('ignore', category=UserWarning)
 
 # ==========================================
@@ -94,15 +96,45 @@ Out_X_Difference("${out_name}${sep}X_Difference.txt")
 # provenance metadata (source, registered) and must never reach a macro call.
 _CELL_KEYS = ('a', 'b', 'c', 'al', 'be', 'ga')
 
+# Cell macros written into the .inp. Every name here must exist in the
+# topas.inc of the machine that runs the file: TOPAS does not ship all of these,
+# and this group's topas.inc carries hand-added definitions. An undefined macro
+# is not a warning at run time, it is a refinement that will not start -- so
+# nothing may be added to this table without the definition going in alongside it.
 CRYSTAL_MACROS = {
 	'triclinic': 'Triclinic(@ $a, @ $b, @ $c, @ $al, @ $be, @ $ga)',
 	'monoclinic': 'Monoclinic(@ $a, @ $b, @ $c, @ $be)',
-	'rhombohedral': 'Rhombohedral(@ $a, @ $al)',
 	'orthorhombic': 'Orthorhombic(@ $a, @ $b, @ $c)',
 	'tetragonal': 'Tetragonal(@ $a, @ $c)',
 	'trigonal': 'Trigonal(@ $a, @ $c)',
 	'hexagonal': 'Hexagonal(@ $a, @ $c)',
 	'cubic': 'Cubic(@ $a)'
+}
+
+# Systems with no macro of their own, and the one they borrow.
+#
+# `Rhombohedral(a, alpha)` is the honest macro for a trigonal group on
+# rhombohedral axes, and it is deliberately NOT in the table above: it is not
+# defined in this group's topas.inc, so emitting it would produce a .inp that
+# TOPAS refuses to run. It used to be listed, but nothing could ever select it
+# -- the crystal system came from pymatgen, which reports such a group as
+# `trigonal` and has no name for the setting -- so the entry was unreachable and
+# no .inp has ever contained the macro.
+#
+# Trigonal's macro assumes HEXAGONAL axes, so borrowing it for a rhombohedral
+# cell writes a cell that is simply wrong rather than one that fails to start.
+# That is the pre-existing behaviour and it stays, because a wrong cell can be
+# spotted and corrected while an unstartable file blocks the whole run -- but it
+# is now said out loud instead of happening silently. Define `Rhombohedral` in
+# topas.inc and move it into the table above to fix it properly.
+MACRO_FALLBACKS = {'rhombohedral': 'trigonal'}
+
+_FALLBACK_WARNING = {
+	'rhombohedral':
+		'the cell is on rhombohedral axes (a = b = c, equal angles off 90) but is '
+		'being written with Trigonal(a, c), which assumes hexagonal axes. The cell '
+		'in the .inp will be wrong. Either convert the CIF to hexagonal axes, or '
+		'define Rhombohedral(a, al) in your topas.inc and edit the macro call by hand.',
 }
 
 # TOPAS Kα2 macro names per anode: (no_secondary_mono, with_secondary_mono)
@@ -171,24 +203,41 @@ def comment_wrap(text: str, width: int = 80) -> str:
 	return "\n".join(lines)
 
 
-def get_parms_pymatgen(file_path: str) -> dict:
-	"""Extracts required lattice parameters and symmetry systems using pymatgen."""
-	from pymatgen.io.cif import CifParser
-	from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+def get_cif_parameters(file_path: str, derive_symmetry: bool = False) -> dict:
+	"""Lattice parameters and symmetry for one CIF, as strings ready for a .inp.
 
-	parser = CifParser(file_path)
-	struct = parser.parse_structures()[0]
-	sga = SpacegroupAnalyzer(struct, symprec=0.01, angle_tolerance=5)
-	lattice = struct.lattice
+	The space group is the one the FILE declares. It is not re-derived from the
+	coordinates, and that is the point: a CIF whose header disagrees with its
+	atoms is a CIF with something wrong in it, and quietly substituting a better
+	answer hides the problem at exactly the moment it is cheapest to notice --
+	while writing a group into `space_group` and into every tick file's name that
+	the depositor never claimed.
+
+	`derive_symmetry=True` (the wizard's --derive-symmetry) asks for the
+	coordinates to decide instead, at the same symprec pymatgen used when this
+	went through it. It is offered because the answer is genuinely useful on a
+	file that has been expanded to P1 by a conversion tool -- but it is opt-in,
+	so it is never something the .inp went through without anyone saying so.
+	"""
+	phase = cifcore.load_phase(file_path)
+	cell = phase.cell_parameters()
+
+	if derive_symmetry:
+		sg_num, sg_hm = phase.detected_symmetry(symprec=0.01)
+		cryst_sys = phase.detected_crystal_system(symprec=0.01)
+	else:
+		sg_num, sg_hm = phase.space_group_number, phase.space_group_symbol
+		cryst_sys = phase.crystal_system
 
 	return {
-		'a': f'{lattice.a:g}', 'b': f'{lattice.b:g}', 'c': f'{lattice.c:g}',
-		'al': f'{lattice.alpha:g}', 'be': f'{lattice.beta:g}', 'ga': f'{lattice.gamma:g}',
-		'V': f'{lattice.volume:g}',
-		'sg_num': str(sga.get_space_group_number()),
-		'sg_HM': str(sga.get_space_group_symbol()),
-		'cryst_sys': str(sga.get_crystal_system()).lower()
+		'a': f'{cell["a"]:g}', 'b': f'{cell["b"]:g}', 'c': f'{cell["c"]:g}',
+		'al': f'{cell["alpha"]:g}', 'be': f'{cell["beta"]:g}', 'ga': f'{cell["gamma"]:g}',
+		'V': f'{phase.volume:g}',
+		'sg_num': str(sg_num),
+		'sg_HM': sg_hm,
+		'cryst_sys': cryst_sys.lower(),
 	}
+
 
 
 def build_phase_section(phases: list, sep: str, out_name: str,
@@ -212,6 +261,10 @@ def build_phase_section(phases: list, sep: str, out_name: str,
 
 	for i, phase in enumerate(phases, start=1):
 		cryst_sys = phase['cryst_sys']
+		if cryst_sys in MACRO_FALLBACKS:
+			warning = _FALLBACK_WARNING.get(cryst_sys, '')
+			print(f'[!] Phase {i} ({phase.get("sg_HM", "?")}): {warning}')
+			cryst_sys = MACRO_FALLBACKS[cryst_sys]
 		if cryst_sys not in CRYSTAL_MACROS:
 			continue
 
@@ -386,6 +439,13 @@ def _build_parser():
 	parser.add_argument('--cif-loc', dest='cif_loc', default=None,
 	                    help='CIF library directory. Overrides the CIF_LOC env var '
 	                         'and any saved profile.')
+	parser.add_argument('--derive-symmetry', action='store_true',
+	                    help='Work the space group out from the atomic coordinates '
+	                         'instead of reading it from the CIF header. Useful for a '
+	                         'file some conversion tool expanded to P1. Off by default: '
+	                         'a header that disagrees with its own atoms is a fault in '
+	                         'the file, and silently correcting it writes a group into '
+	                         'your .inp that nobody claimed.')
 	identity.add_user_argument(parser)
 	return parser
 
@@ -438,7 +498,8 @@ def main():
 	for path in cif_paths:
 		name = Path(path).stem
 		try:
-			available_phases[name] = get_parms_pymatgen(path)
+			available_phases[name] = get_cif_parameters(
+				path, derive_symmetry=bool(getattr(args, 'derive_symmetry', False)))
 		except Exception:
 			continue  # Silently skip malformed CIFs
 

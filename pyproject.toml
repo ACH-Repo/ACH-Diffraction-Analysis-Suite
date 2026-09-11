@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ach-diffraction-suite"
-version = "0.6.0"
+version = "0.8.0"
 description = "PXRD and TOPAS analysis tools: Pawley fit setup, prefitting, plotting, and lattice-parameter tables."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,15 +31,25 @@ classifiers = [
     "Environment :: Console",
 ]
 
-# pymatgen is needed by four of the five tools, so it is not an optional extra.
 # scipy (prefit) and beautifulsoup4 (tables) are single-tool dependencies, but
 # splitting them into extras would mean a user who runs `pf` after installing
 # without extras gets an ImportError instead of a working tool. For a five-tool
 # lab suite the simpler contract is: one install, everything works.
+#
+# pymatgen was dropped in 0.8.0. Its CifParser refuses files this lab produces
+# -- a site occupancy above its tolerance discards the whole data block, and
+# several refinement programs write that column as atoms-per-site -- so a good
+# file would raise "Invalid CIF file with no structures!" and the phase would
+# vanish from the plot. The crystallography now comes from the vendored MoloM
+# core in achdiff/core/_molom/, which needs only numpy and spglib. That also
+# takes pandas, sympy, monty, networkx and the rest of pymatgen's tree out of a
+# lab install.
 dependencies = [
     "numpy",
     "matplotlib",
-    "pymatgen",
+    # Space-group symbol -> symmetry operations, and symmetry FROM coordinates
+    # (prefit's crystal-system detection). Used through core/_molom.
+    "spglib",
     "scipy",
     "beautifulsoup4",
     "platformdirs",

@@ -15,7 +15,7 @@ pip install ach-diffraction-suite
 | `pp` | plotter | Publication plots of a finished Pawley fit |
 | `pq` | quickplot | Quick stacked comparison of raw patterns |
 | `pt` | tables | HTML lattice-parameter tables from a batch of `.out` files |
-| `achdiff` | — | Manage profiles, config and your own command aliases |
+| `achdiff` | — | Manage profiles, plot styles, config and your own command aliases |
 
 The hand-written `.cmd` shims are no longer needed — pip puts real executables on
 `PATH`. Delete the old shims to avoid them shadowing the installed commands.
@@ -112,8 +112,10 @@ First match wins:
 
 1. `-u CN` on the command line
 2. `ACH_USER=CN` in the environment
-3. the sample-name prefix of files in the working directory — **only if that
-   prefix is a registered profile**
+3. the sample-name prefix of files in the working directory — `CN-sample1.xy`
+   or `CN_sample1.xy`, either separator — **only if that prefix is a registered
+   profile** (`achdiff profile set -u CN ...`; writing a style sheet does not
+   register one)
 4. otherwise no profile: `[defaults]` applies
 
 Step 3 is deliberately restricted to registered IDs. The prefix pattern
@@ -159,6 +161,72 @@ setting decides the default, the flag decides the invocation.
 
 Set `ACH_CONFIG_DIR` to relocate the whole config (useful for a portable install
 or for testing against a throwaway config).
+
+## Your own plot style
+
+Every group has house rules for a figure — what the y axis is called, whether
+the legend says "Reflections" or "Bragg reflections", whether the R-factor sits
+in the plot or in the caption. `pp` reads those from a style sheet of your own,
+picked by the same `-u` that picks your CIF library.
+
+```bash
+achdiff style init -u CN     # write a commented file listing every setting
+achdiff style edit -u CN     # open it
+pp -s                        # every plot from now on is in your style
+```
+
+`init` writes `%APPDATA%\ach-diffraction\styles\CN.toml` with every setting at
+the value currently in effect, each one commented out and explained. Uncomment
+what you want to own; anything left commented keeps following the built-in, so
+a later release can improve a default you never asked about.
+
+```toml
+[axes]
+y_label   = 'Intensity / arb. units'
+ticks_top = true
+
+[legend]
+observed_label   = 'observed'
+calculated_label = 'calculated'
+difference_label = 'difference'
+bragg_label      = 'Bragg reflections'
+legend_frame     = false
+
+[annotations]
+show_quality = false          # R_wp goes in the caption instead
+```
+
+Style sheets live outside the package, so `pip install --upgrade` never touches
+them, and nothing personal has to be committed anywhere to make a person's plots
+come out right on their own machine.
+
+### Layering
+
+```
+--style FILE  >  ACH_STYLE  >  styles/<ID>.toml  >  styles/default.toml  >  built-in
+```
+
+`styles/default.toml` sets a whole machine's look for everyone without one of
+their own. `--style` layers a one-off on top without editing yours:
+
+```bash
+pp -s --style narrow-column          # same look, journal column width
+```
+
+A bare name is looked up in the styles directory, so one-off styles can live
+beside the personal ones. A path is used as given.
+
+`pp` prints which style sheets it used, next to the profile line.
+
+### Naming the Bragg rows
+
+`bragg_label` gives every tick row one fixed name. Left empty, each row names
+itself after its own space group and substance, which is the built-in behaviour.
+
+A fixed name collapses to a single legend entry while the rows are drawn alike.
+The moment two rows differ in colour it stops collapsing them and appends each
+phase instead — `Bragg reflections (ZIF-4)`, `Bragg reflections (ZIF-zni)` —
+because two colours in a plot need two entries in the key.
 
 ## Trusted starting parameters
 
@@ -269,6 +337,7 @@ pp -s -c                            # save SVGs with unit-cell boxes
 pp -s -c -x png --qall              # PNGs, all three quality factors
 pp -s -m 20,40,10                   # multiply intensity in 2θ ∈ [20°, 40°] by 10
 pp -s -r "(ZIF-8,10,magenta)"       # overlay reflections simulated from a CIF
+pp -s --style narrow-column.toml    # one-off look on top of your own style
 ```
 
 Auto-discovers TOPAS output groups in the current directory. `-r` overlays
@@ -324,8 +393,23 @@ regeneration step to forget. `ACH_CACHE_DIR` relocates the cache.
 
 ## Requirements
 
-Python ≥ 3.10. Dependencies install automatically: numpy, matplotlib, pymatgen,
+Python ≥ 3.10. Dependencies install automatically: numpy, matplotlib, spglib,
 scipy, beautifulsoup4, platformdirs.
+
+**Changed in 0.8.0:** pymatgen is no longer a dependency. Its CIF parser refuses
+files this lab produces — a site occupancy above its tolerance discards the whole
+data block, and several refinement programs write that column as atoms-per-site,
+so a good file raised *"Invalid CIF file with no structures!"* and the phase
+silently vanished from the plot. The crystallography now comes from a vendored
+copy of [ACH-MoloM](https://github.com/ACH-Repo/ACH-MoloM)'s core, which computes
+what the file says. Reflection positions and relative intensities are unchanged;
+`pq`'s simulated CIF patterns are pixel-identical across the switch.
+
+`rp` now writes the space group **the CIF declares**, where it used to re-derive
+it from the atomic coordinates. A header that disagrees with its own atoms is a
+fault in the file, and silently correcting it put a group into your `.inp` that
+the depositor never claimed. Pass `--derive-symmetry` to get the old behaviour
+for a file some conversion tool expanded to P1.
 
 ## Development install
 
@@ -344,11 +428,19 @@ Publishing a new version: see [RELEASING.md](RELEASING.md).
 src/achdiff/
 ├── config.py            # layered settings, profile storage
 ├── identity.py          # who is running this
+├── styles.py            # per-person plot style sheets
 ├── core/
 │   ├── rounding.py      # crystallographic rounding (one copy)
-│   └── cif.py           # CIF resolution + reflection simulation
+│   ├── cif.py           # CIF resolution + reflection simulation
+│   └── _molom/          # vendored MoloM crystallography (do not edit)
 └── tools/               # one module per command
 ```
+
+`core/_molom/` is a byte-for-byte copy of five modules from ACH-MoloM, re-synced
+with `python tools/sync_molom.py`. It is vendored rather than depended on
+because installing `molom` would pull PySide6, PyOpenGL, rdkit and openbabel
+into a command-line suite. `core/cif.py` is the adapter and the only place that
+knows both sides.
 
 `core/` exists because these helpers had drifted apart across the old
 repositories — two `cryst_round` implementations disagreed on refinement-limit

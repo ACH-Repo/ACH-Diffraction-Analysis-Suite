@@ -46,6 +46,16 @@ touch(d, 'CN-sample1_pawley_01_X_Yobs.txt', 'CN-sample2.xy',
 check('scans all prefixes incl. material names, most common first',
       identity.candidate_prefixes(d), ['CN', 'MOF', 'ZIF'])
 
+# People write the separator both ways, and a prefix that only counts with a
+# hyphen makes inference look broken for whoever happens to use underscores.
+d_us = tempfile.mkdtemp()
+touch(d_us, 'XX_Mg3(PO4)2-II_pawley_01_X_Yobs.txt', 'XX_Mg3(PO4)2-II_pawley_01_2Th_Ip_18.txt')
+check('an underscore separates a prefix just as a hyphen does',
+      identity.candidate_prefixes(d_us), ['XX'])
+check('...and still only when the ID is registered',
+      (identity.infer_from_filenames(d_us, known=['XX']),
+       identity.infer_from_filenames(d_us, known=['AB'])), ('XX', None))
+
 # ---------- the collision guard ----------
 check('empty roster infers nothing',
       identity.infer_from_filenames(d, known=[]), None)
@@ -191,6 +201,370 @@ config.save_profile('MG', {'cif_loc': r'D:\A'})
 config.save_profile('MG', {'qall': True})
 check('a later save merges with the earlier one',
       sorted(config.profiles()['MG']), ['cif_loc', 'qall'])
+
+
+# ---------- style sheets ----------
+import re  # noqa: E402
+
+from achdiff import styles  # noqa: E402
+from achdiff.tools import plotter  # noqa: E402
+
+_STYLE_DIR = Path(_TMP) / styles.STYLES_DIRNAME
+_STYLE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def write_style(stem, text):
+	path = _STYLE_DIR / f'{stem}.toml'
+	path.write_text(text, encoding='utf-8')
+	return path
+
+
+def applied(user=None, explicit=None, **seed):
+	"""Run a style over a throwaway settings dict and hand back the result."""
+	target = dict(plotter.settings)
+	target.update(seed)
+	styles.apply(target, user=user, explicit=explicit)
+	return target
+
+
+write_style('default', "[legend]\nlegend_frame = false\nlegend_fontsize = 7\n")
+write_style('SS', "[legend]\nlegend_fontsize = 9\n\n[annotations]\nshow_quality = false\n")
+
+check('a style maps its public key onto the plotter setting',
+      applied('SS')['legend_fontsize'], 9.0)
+check('show_quality reaches the setting that gates the R_wp annotation',
+      applied('SS')['show_info'], False)
+check('default.toml applies underneath a personal style',
+      applied('SS')['legend_frame'], False)
+check('a personal style outranks default.toml on a shared key',
+      (applied()['legend_fontsize'], applied('SS')['legend_fontsize']), (7.0, 9.0))
+check('no profile means default.toml alone',
+      applied()['show_info'], True)
+
+# Group headers are readability sugar, so a flat file has to work identically.
+write_style('FLAT', "legend_fontsize = 12\n")
+check('a file without group headers is read the same way',
+      applied('FLAT')['legend_fontsize'], 12.0)
+
+# A style sheet is decoration: nothing in it may stop a figure being drawn.
+write_style('BAD', "\n".join([
+	"legend_fontsize = 'large'",       # wrong type
+	"observed_color = 'nosuchcolour'",  # not a colour
+	"tick_direction = 'sideways'",      # not one of the choices
+	"figsize = [6]",                    # wrong shape
+	"legend_columsn = 2",               # typo'd key
+	"legend_loc = 'lower left'",        # ... and one good value among them
+]))
+bad = applied('BAD')
+# legend_fontsize falls back to 7 rather than the built-in 8: default.toml above
+# set it, and a rejected value drops through to the layer beneath, not to zero.
+check('a rejected value leaves the layer beneath it in place',
+      (bad['legend_fontsize'], bad['X_Yobs_color'], bad['tick_direction']),
+      (7.0, 'k', 'in'))
+check('a wrongly shaped figsize is rejected', bad['figsize'], (6, 4))
+check('good values in a file with bad ones still apply',
+      bad['legend_loc'], 'lower left')
+
+try:
+	styles.apply(dict(plotter.settings), explicit=str(_STYLE_DIR / 'nope.toml'))
+	check('a --style file that does not exist is an error', 'no raise', 'FileNotFoundError')
+except FileNotFoundError:
+	check('a --style file that does not exist is an error',
+	      'FileNotFoundError', 'FileNotFoundError')
+
+# `--style narrow` should find styles/narrow.toml, the way `-r ZIF-8` finds a
+# CIF in the library. Typing the full path to a file the suite wrote itself is
+# friction with nothing behind it.
+write_style('narrow', '[figure]\nfigsize = [3.3, 4.0]\n')
+check('--style takes a bare name from the styles directory',
+      styles.resolve_named_style('narrow').name, 'narrow.toml')
+check('...and the same name with its suffix',
+      styles.resolve_named_style('narrow.toml').name, 'narrow.toml')
+check('a bare name layers on top of the personal style',
+      applied('SS', explicit='narrow')['figsize'], (3.3, 4.0))
+check('a name matching nothing comes back as typed, for the error to quote',
+      styles.resolve_named_style('nope').name, 'nope')
+
+# `achdiff style init` writes the catalogue people edit. Every line in it must be
+# a key the loader knows and a value it accepts, or the first thing anyone
+# uncomments is a warning.
+tpl = styles.template('SS')
+uncommented = re.sub(r'^# (?=\w+ = )', '', tpl, flags=re.MULTILINE)
+parsed = config.tomllib.loads(uncommented)
+flat = {}
+for _k, _v in parsed.items():
+	flat.update(_v) if isinstance(_v, dict) else flat.update({_k: _v})
+check('the template lists every setting in the schema',
+      sorted(flat) == sorted(styles.BY_NAME), True)
+write_style('TPL', uncommented)
+round_tripped = applied('TPL')
+check('reading the template back reproduces the built-in values exactly',
+      [k.name for k in styles.BY_NAME.values()
+       if round_tripped[k.target] != plotter.settings[k.target]], [])
+
+
+# ---------- Bragg legend naming ----------
+def bragg(label, colors, substances=None):
+	substances = substances or [f'S{i}' for i in range(len(colors))]
+	meta = [{'color': c, 'substance': s, 'label': f'L{i}'}
+	        for i, (c, s) in enumerate(zip(colors, substances))]
+	before = plotter.settings['bragg_label']
+	plotter.settings['bragg_label'] = label
+	try:
+		return plotter._bragg_labels(meta)
+	finally:
+		plotter.settings['bragg_label'] = before
+
+
+check('without a fixed name each row keeps its own space group and substance',
+      bragg('', ['k', 'b']), ['L0', 'L1'])
+check('one phase takes the fixed name as written',
+      bragg('Bragg reflections', ['k']), ['Bragg reflections'])
+check('rows sharing a colour share one name, for legend_dedupe to collapse',
+      bragg('Bragg reflections', ['k', 'k']),
+      ['Bragg reflections', 'Bragg reflections'])
+check('rows in different colours are told apart, since both need a legend entry',
+      bragg('Bragg reflections', ['k', 'b'], ['ZIF-4', 'ZIF-zni']),
+      ['Bragg reflections (ZIF-4)', 'Bragg reflections (ZIF-zni)'])
+check('a row with no substance falls back to its space-group label',
+      bragg('Bragg reflections', ['k', 'b'], ['ZIF-4', None]),
+      ['Bragg reflections (ZIF-4)', 'Bragg reflections (L1)'])
+
+
+
+# ---------- config.write preserves what it does not recognise ----------
+# Until this was fixed, write() emitted a profile's scalars and its `trusted` set
+# and nothing else: any other sub-table was read successfully and then discarded
+# at the next unrelated save, and a dict under [defaults] came back as a quoted
+# Python repr.
+cfg = config.load()
+nest = cfg.setdefault('profiles', {}).setdefault('NEST', {})
+nest['cif_loc'] = r'D:\N'
+nest['notes'] = {'instrument': 'D8'}
+nest['deep'] = {'a': {'b': {'value': 7}}}
+cfg.setdefault('defaults', {})['style'] = {'dpi': 300, 'legend_frame': False}
+config.write(cfg)
+
+config.save_trusted('NEST', 'ZIF-4', {'a': 15.4})   # the unrelated save that used to lose it
+back = config.load()
+nest_back = back.get('profiles', {}).get('NEST', {})
+
+check('an unrecognised profile sub-table survives a later save',
+      nest_back.get('notes'), {'instrument': 'D8'})
+check('a dict under [defaults] round-trips as a table, not a repr string',
+      back.get('defaults', {}).get('style'), {'dpi': 300, 'legend_frame': False})
+check('nesting deeper than the tools themselves write survives',
+      nest_back.get('deep'), {'a': {'b': {'value': 7}}})
+check('trusted parameters still round-trip alongside it',
+      nest_back.get('trusted', {}).get('ZIF-4', {}).get('a'), 15.4)
+check('plain settings are untouched by any of it', nest_back.get('cif_loc'), r'D:\N')
+
+# Values write() has to escape rather than stringify. An apostrophe used to be
+# doubled, which ends a TOML literal string early and makes the whole file
+# unparseable -- so the check is that it survives a round trip at all.
+cfg = config.load()
+cfg['profiles']['NEST']['cif_loc'] = "D:\\Bob's data"
+cfg['profiles']['NEST']['palette'] = ['k', 'b']
+config.write(cfg)
+back = config.load()
+nest_back = back.get('profiles', {}).get('NEST', {})
+check('a value containing an apostrophe round-trips',
+      nest_back.get('cif_loc'), "D:\\Bob's data")
+check('a list value round-trips as a TOML array', nest_back.get('palette'), ['k', 'b'])
+
+config.remove_trusted('NEST', 'ZIF-4')
+written = config.config_path().read_text(encoding='utf-8')
+check('removing the last phase leaves no empty trusted table behind',
+      '[profiles.NEST.trusted]' in written, False)
+check('an intermediate table gets no bare header of its own',
+      '[profiles.NEST.deep]' in written, False)
+
+
+# ---------- CIF loading ----------
+import numpy as np  # noqa: E402
+
+from achdiff.core import cif as cifcore  # noqa: E402
+
+
+def _raises(fn):
+	"""True if `fn` raised anything. The check is that a bad input is refused,
+	not which exception type carries the news."""
+	try:
+		fn()
+		return False
+	except Exception:
+		return True
+
+
+def cell_volume_is_nan():
+	value = cifcore.cell_volume(a=1.0, b=1.0, c=1.0, alpha=10.0, beta=10.0, gamma=170.0)
+	return value != value   # NaN is the only value unequal to itself
+
+# The crystallography comes from the vendored MoloM core, not pymatgen. These
+# pin the two things the switch had to get right: files pymatgen refuses must
+# load, and the arithmetic must not have moved.
+_CIF_DIR = Path(tempfile.mkdtemp())
+
+
+def write_cif(name, occupancy='1.0', extra_site=''):
+	"""A minimal P1 cell with one carbon, plus whatever the caller adds."""
+	path = _CIF_DIR / name
+	path.write_text('\n'.join([
+		'data_test',
+		'_cell_length_a 5.0',
+		'_cell_length_b 6.0',
+		'_cell_length_c 7.0',
+		'_cell_angle_alpha 90.0',
+		'_cell_angle_beta 90.0',
+		'_cell_angle_gamma 90.0',
+		"_symmetry_space_group_name_H-M 'P 1'",
+		'loop_',
+		'_atom_site_label',
+		'_atom_site_type_symbol',
+		'_atom_site_fract_x',
+		'_atom_site_fract_y',
+		'_atom_site_fract_z',
+		'_atom_site_occupancy',
+		f'C1 C 0.0 0.0 0.0 {occupancy}',
+		extra_site,
+		'']), encoding='utf-8')
+	return path
+
+
+# A site occupancy of 4.0 is how several refinement programs spell "four atoms
+# on this site". pymatgen's default tolerance of 1.0 does not warn about it --
+# it discards the whole data block, and a single-block file then raises
+# "Invalid CIF file with no structures!".
+_full = write_cif('full.cif', occupancy='1.0')
+_over = write_cif('overfull.cif', occupancy='4.0')
+
+phase = cifcore.load_phase(_over, announce=False)
+check('a CIF pymatgen would reject on occupancy still loads', len(phase.symbols), 1)
+check('an over-full site is rescaled to one atom, not left scattering four times',
+      round(float(phase.occupancy[0]), 6), 1.0)
+check('a site that is merely full is left exactly as written',
+      round(float(cifcore.load_phase(_full, announce=False).occupancy[0]), 6), 1.0)
+
+# The rescale is per site, not per atom in the expanded cell: a site repeats
+# once per symmetry operator, and totalling occupancies there would shrink every
+# ordinary structure in a high-symmetry group.
+check('rescaling leaves an ordinary full structure untouched',
+      [round(float(v), 6) for v in
+       cifcore.load_phase(Path('examples/H2bdc.cif'), announce=False).occupancy],
+      [1.0] * 18)
+
+check('reflection positions are unchanged by the backend switch',
+      [round(float(v), 5) for v in
+       cifcore.simulate_reflections('examples/H2bdc.cif', 5, (5, 50))],
+      [17.37534, 25.28043, 27.9579, 39.94131, 40.60582])
+
+# Straining the cell must move the peaks and leave the contents alone: that is
+# the whole of what prefit's sliders do.
+_phase = cifcore.load_phase('examples/H2bdc.cif', announce=False)
+_wide = _phase.with_cell(a=_phase.cell.a * 1.10)
+check('straining a cell keeps the contents', len(_wide.symbols), len(_phase.symbols))
+check('straining a cell changes the volume',
+      round(_wide.volume / _phase.volume, 4), 1.1)
+_p0, _i0, _h0 = _phase.peaks((5, 50))
+_p1, _i1, _h1 = _wide.peaks((5, 50))
+# Compared on the strongest peak rather than element-wise: a longer a axis pulls
+# extra reflections into the window, so the two lists are not the same length.
+check('stretching an axis moves the peaks to lower angle',
+      float(_p1[int(_i1.argmax())]) < float(_p0[int(_i0.argmax())]), True)
+check('peaks come back sorted by angle', bool((np.diff(_p1) >= 0).all()), True)
+check('every peak carries an hkl', len(_h1), len(_p1))
+
+check('an impossible cell is refused before anything plots it',
+      _raises(lambda: _phase.with_cell(alpha=10.0, beta=10.0, gamma=170.0)), True)
+check('and cell_volume reports it as NaN rather than raising',
+      cell_volume_is_nan(), True)
+
+check('crystal system comes back in the spelling the TOPAS macros use',
+      _phase.crystal_system, 'triclinic')
+
+# H2bdc.cif declares P1 and lists a whole cell whose atoms have an inversion
+# centre. Both answers are available; which one is used is a decision, not an
+# implementation detail, so each is pinned separately.
+check('what the file declares is what is reported',
+      (_phase.space_group_number, _phase.space_group_symbol), (1, 'P1'))
+check('...and the atoms can be asked separately, when someone asks',
+      _phase.detected_symmetry(symprec=0.01), (2, 'P-1'))
+check('the derived system agrees with the derived group',
+      _phase.detected_crystal_system(symprec=0.01), 'triclinic')
+
+from achdiff.tools import wizard  # noqa: E402
+
+# A CIF whose header disagrees with its own atoms is a CIF with a fault in it.
+# The wizard reports the header, so the fault stays visible rather than being
+# quietly corrected into a .inp nobody asked for.
+check('the wizard writes the space group the file declares',
+      wizard.get_cif_parameters('examples/H2bdc.cif'),
+      {'a': '5.0374', 'b': '5.3641', 'c': '7.0068',
+       'al': '72.004', 'be': '76.098', 'ga': '87.219', 'V': '174.727',
+       'sg_num': '1', 'sg_HM': 'P1', 'cryst_sys': 'triclinic'})
+check('--derive-symmetry is what asks the atoms instead',
+      {k: v for k, v in
+       wizard.get_cif_parameters('examples/H2bdc.cif', derive_symmetry=True).items()
+       if k in ('sg_num', 'sg_HM')},
+      {'sg_num': '2', 'sg_HM': 'P-1'})
+# The fixture's header says P 1, so that is what comes back. Asking the atoms
+# instead finds Pmmm -- one atom at the origin of a 5 x 6 x 7 box.
+check('and reads a CIF pymatgen refused outright',
+      wizard.get_cif_parameters(_over)['sg_num'], '1')
+check('...where --derive-symmetry would have found the fuller group',
+      wizard.get_cif_parameters(_over, derive_symmetry=True)['sg_num'], '47')
+
+
+# ---------- only macros that exist in topas.inc may be written ----------
+# An undefined macro is not a warning at run time; it is a refinement that will
+# not start. `Rhombohedral` is not defined in this group's topas.inc, so no code
+# path may reach it -- and it is easy to reach by accident, because it is the
+# honest macro for a trigonal group on rhombohedral axes.
+check('no macro is written that topas.inc does not define',
+      'rhombohedral' in wizard.CRYSTAL_MACROS, False)
+check('every fallback lands on a macro that does exist',
+      [s for s in wizard.MACRO_FALLBACKS.values() if s not in wizard.CRYSTAL_MACROS], [])
+
+
+def _rhombohedral_cif(name, a, c, alpha, gamma):
+	path = _CIF_DIR / name
+	path.write_text('\n'.join([
+		'data_r',
+		f'_cell_length_a {a}',
+		f'_cell_length_b {a}',
+		f'_cell_length_c {c}',
+		f'_cell_angle_alpha {alpha}',
+		f'_cell_angle_beta {alpha}',
+		f'_cell_angle_gamma {gamma}',
+		"_symmetry_space_group_name_H-M 'R -3 c'",
+		'loop_',
+		'_atom_site_label',
+		'_atom_site_type_symbol',
+		'_atom_site_fract_x',
+		'_atom_site_fract_y',
+		'_atom_site_fract_z',
+		'_atom_site_occupancy',
+		'Al1 Al 0.35216 0.35216 0.35216 1.0' if c == a else 'Al1 Al 0.0 0.0 0.35216 1.0',
+		'O1 O 0.5560 0.9440 0.2500 1.0' if c == a else 'O1 O 0.30624 0.0 0.25 1.0',
+		'']), encoding='utf-8')
+	return wizard.get_cif_parameters(path)
+
+
+_rhomb = _rhombohedral_cif('rhomb.cif', 5.4280, 5.4280, 55.280, 55.280)
+_hexax = _rhombohedral_cif('hexax.cif', 4.7590, 12.9910, 90.0, 120.0)
+
+check('a cell on rhombohedral axes is recognised as such',
+      _rhomb['cryst_sys'], 'rhombohedral')
+check('...but still writes the Trigonal macro, the one topas.inc has',
+      'Trigonal(' in wizard.build_phase_section([_rhomb], '_p_', 'out'), True)
+check('...and never writes Rhombohedral(',
+      'Rhombohedral(' in wizard.build_phase_section([_rhomb], '_p_', 'out'), False)
+check('the same group on hexagonal axes is untouched, as it always was',
+      _hexax['cryst_sys'], 'trigonal')
+
+check('a CIF with no atoms is an error, not an empty plot',
+      _raises(lambda: cifcore.load_phase(_CIF_DIR / 'nope.cif')), True)
+
 
 print()
 print(f'{len(fails)} failure(s)' + (': ' + ', '.join(fails) if fails else ''))

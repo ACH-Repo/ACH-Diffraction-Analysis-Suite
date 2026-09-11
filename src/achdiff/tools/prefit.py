@@ -40,10 +40,6 @@ from matplotlib.collections import LineCollection
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from pymatgen.core import Structure, Lattice
-from pymatgen.analysis.diffraction.xrd import XRDCalculator
-from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-
 try:
 	from scipy.signal import find_peaks
 except ImportError:
@@ -51,6 +47,7 @@ except ImportError:
 
 from .. import config, identity
 from ..core import bruker
+from ..core import cif as cifcore
 from ..progname import prog_name
 
 
@@ -240,11 +237,20 @@ def format_topas(system, full_params):
 	return TOPAS_MACROS[system].format(**fmt)
 
 
-def detect_system(structure):
-	try:
-		return SpacegroupAnalyzer(structure, symprec=0.1).get_crystal_system()
-	except Exception:
-		return 'triclinic'
+def detect_system(phase):
+	"""The crystal system to start a phase in, clamped to the ones with sliders.
+
+	`symprec=0.1` is deliberately loose, and inherited: it recognises a
+	structure whose file understates its symmetry, which is the case worth
+	catching here. Anything outside SYSTEM_PARAMS becomes triclinic -- the
+	system with every parameter free, so an unexpected answer never silently
+	locks one."""
+	system = phase.detected_crystal_system(symprec=0.1)
+	# `rhombohedral` is a setting rather than a system and has no slider set of
+	# its own; its free parameters are trigonal's, which is what it falls back to.
+	if system == 'rhombohedral':
+		system = 'trigonal'
+	return system if system in SYSTEM_PARAMS else 'triclinic'
 
 
 # ==========================================
@@ -280,17 +286,15 @@ class Phase:
 		self.path = str(cif_path)
 		self.label = Path(cif_path).stem
 		self.color = color
-		self.calc = XRDCalculator(wavelength=wavelength)
+		self.wavelength = float(wavelength)
 
-		structure = Structure.from_file(cif_path)
-		self.structure = structure
+		phase = cifcore.load_phase(cif_path)
+		self.phase = phase
 
-		self.detected_system = detect_system(structure)
+		self.detected_system = detect_system(phase)
 		self.system = self.detected_system
 
-		lat = structure.lattice
-		self.original = dict(a=lat.a, b=lat.b, c=lat.c,
-		                     alpha=lat.alpha, beta=lat.beta, gamma=lat.gamma)
+		self.original = phase.cell_parameters()
 		self.params = {k: self.original[k] for k in SYSTEM_PARAMS[self.system]}
 		self.uniform_scale = 1.0
 
@@ -304,14 +308,8 @@ class Phase:
 	def full_params(self):
 		return expand_params(self.system, self.params, self.uniform_scale)
 
-	def get_lattice(self):
-		return Lattice.from_parameters(**self.full_params())
-
 	def volume(self):
-		try:
-			return self.get_lattice().volume
-		except Exception:
-			return float('nan')
+		return cifcore.cell_volume(**self.full_params())
 
 	def reset(self):
 		self.system = self.detected_system
@@ -331,13 +329,11 @@ class Phase:
 		x_lo, x_hi = float(two_theta_range[0]), float(two_theta_range[1])
 
 		try:
-			lattice = self.get_lattice()
-			struct = Structure(lattice=lattice,
-			                   species=self.structure.species,
-			                   coords=self.structure.frac_coords,
-			                   coords_are_cartesian=False)
-			patt = self.calc.get_pattern(struct,
-			                              two_theta_range=(max(x_lo, 1e-3), x_hi))
+			# Only the cell is restated; the contents never move, which is what
+			# straining a cell means and why this is cheap enough to run on every
+			# drag of a slider.
+			strained = self.phase.with_cell(**self.full_params())
+			pos, ii, hkls = strained.peaks((max(x_lo, 1e-3), x_hi), self.wavelength)
 		except Exception:
 			# Pattern not computable (e.g. degenerate lattice) — clear arrays.
 			self.peak_positions = np.array([])
@@ -347,22 +343,15 @@ class Phase:
 			self.sim_y = np.array([])
 			return
 
-		pos = np.asarray(patt.x, dtype=float)
-		ii = np.asarray(patt.y, dtype=float)
 		if ii.size > 0 and ii.max() > 0:
 			ii = ii / ii.max()
 
-		# Pick the first hkl in each multiplicity group for the click annotation.
-		hkls_first = []
-		for grp in patt.hkls:
-			if isinstance(grp, list) and grp and isinstance(grp[0], dict):
-				hkls_first.append(tuple(grp[0].get('hkl', (0, 0, 0))))
-			else:
-				hkls_first.append((0, 0, 0))
-
 		self.peak_positions = pos
 		self.peak_intensities = ii
-		self.peak_hkls = hkls_first
+		# One representative index triple per merged reflection: the rest of a
+		# multiplicity group sits at the same angle and would only repeat itself
+		# in the click annotation.
+		self.peak_hkls = list(hkls)
 
 		# Lorentzian-broadened overlay curve.
 		step = max(broadening / 10.0, 0.001)
@@ -745,7 +734,7 @@ class PrefitApp:
 		print(f'System:  {phase.system}'
 		      + ('' if phase.system == phase.detected_system
 		         else f'  (detected: {phase.detected_system})'))
-		V0 = Lattice.from_parameters(**self.fill_original(phase)).volume
+		V0 = cifcore.cell_volume(**self.fill_original(phase))
 		print(f'Volume:  {V:.4f} A^3  (delta {V - V0:+.3f} A^3)')
 		print(f'a={full["a"]:.5f}  b={full["b"]:.5f}  c={full["c"]:.5f}')
 		print(f'alpha={full["alpha"]:.4f}  beta={full["beta"]:.4f}  gamma={full["gamma"]:.4f}')
@@ -863,7 +852,7 @@ class PrefitApp:
 		for p in self.phases:
 			full = p.full_params()
 			V = p.volume()
-			V0 = Lattice.from_parameters(**p.original).volume
+			V0 = cifcore.cell_volume(**p.original)
 			dV_pct = 100.0 * (V - V0) / V0 if V0 > 0 else 0.0
 			m = p.metric(self.exp_peaks_x, SETTINGS['top_n_metric'])
 			marker = '►' if p is self._current_phase() else ' '

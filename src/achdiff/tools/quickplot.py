@@ -254,29 +254,19 @@ def read_brml(path):
 
 
 def read_cif(path, two_theta_range=None):
-	"""Simulate a PXRD pattern from a CIF: pymatgen reflections convolved with
+	"""Simulate a PXRD pattern from a CIF: computed reflections convolved with
 	Lorentzians of FWHM `args.broadening` (degrees 2θ).
 
 	`two_theta_range`: optional (lo, hi) in degrees. The main loop passes the
 	global x-range of all measured traces so the simulated pattern lines up
 	with the experimental data. Reflections outside the range are dropped."""
-	try:
-		from pymatgen.core import Structure
-		from pymatgen.analysis.diffraction.xrd import XRDCalculator
-	except ImportError as e:
-		raise ImportError('CIF plotting needs pymatgen installed.') from e
-
 	if two_theta_range is None:
 		two_theta_range = (0.0, 90.0)
 	x_lo, x_hi = float(two_theta_range[0]), float(two_theta_range[1])
 
-	structure = Structure.from_file(path)
-	calc = XRDCalculator(wavelength=SETTINGS['cif_wavelength'])
-	# pymatgen requires a non-zero lower bound; clamp to a tiny positive value.
-	pattern = calc.get_pattern(structure, two_theta_range=(max(x_lo, 1e-6), x_hi))
-
-	positions = np.asarray(pattern.x, dtype=float)
-	intensities = np.asarray(pattern.y, dtype=float)
+	phase = cifcore.load_phase(path)
+	positions, intensities, _hkls = phase.peaks((x_lo, x_hi),
+	                                            SETTINGS['cif_wavelength'])
 
 	fwhm = float(getattr(args, 'broadening', SETTINGS['broadening']))
 	half = fwhm / 2.0
