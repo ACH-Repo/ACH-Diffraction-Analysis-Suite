@@ -202,6 +202,20 @@ config.save_profile('MG', {'qall': True})
 check('a later save merges with the earlier one',
       sorted(config.profiles()['MG']), ['cif_loc', 'qall'])
 
+# A profile decides which CIF library, which style sheet, AND whether filename
+# inference recognises this person at all. Someone who wants only the last two
+# should not have to invent a setting to get them.
+config.save_profile('NC', {})
+check('a profile with no settings is still registered',
+      'NC' in config.profile_ids(), True)
+config.save_profile('MG', {'qall': False})
+check('...and survives an unrelated save', 'NC' in config.profile_ids(), True)
+
+d_nc = tempfile.mkdtemp()
+touch(d_nc, 'NC-sample1.xy', 'NC-sample2.xy')
+check('...and is enough for filename inference to recognise the person',
+      identity.infer_from_filenames(d_nc, known=config.profile_ids()), 'NC')
+
 
 # ---------- style sheets ----------
 import re  # noqa: E402

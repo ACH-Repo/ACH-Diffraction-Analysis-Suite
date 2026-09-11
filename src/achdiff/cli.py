@@ -469,8 +469,26 @@ def cmd_profile_set(args):
 			return 1
 
 	if not settings:
-		print(f'[!] Give at least one setting, e.g. cif_loc="D:\\path\\to\\CIFs"')
-		return 1
+		# Registering the ID with nothing in it is a real thing to want. A profile
+		# decides which CIF library AND which style sheet applies, and whether the
+		# tools recognise this person's filenames at all -- someone who needs only
+		# the last two should not have to invent a setting to get them. Not so for
+		# --global, where an empty [defaults] would mean nothing at all.
+		if args.is_global:
+			print('[!] --global needs at least one setting, e.g. '
+			      'cif_loc="D:\\path\\to\\CIFs"')
+			return 1
+		already = user in config.profile_ids()
+		path = config.save_profile(user, {})
+		if already:
+			print(f'[+] Profile {user} was already registered; nothing changed.')
+		else:
+			print(f'[+] Registered profile {user} with no settings.')
+			print('    Filename inference will recognise it now, and a style sheet')
+			print('    filed under it applies without -u. Add settings any time:')
+			print(f'      achdiff profile set -u {user} cif_loc="D:\\path\\to\\CIFs"')
+		print(f'    -> {path}')
+		return 0
 
 	if user:
 		path = config.save_profile(user, settings)
@@ -616,7 +634,7 @@ def cmd_style_init(args):
 		print(f'[!] No profile {user} is registered yet, so the tools will only use')
 		print(f'    this style when you pass -u {user} explicitly. To have it picked')
 		print(f'    up from your sample-name prefixes as well, register the ID:')
-		print(f'      achdiff profile set -u {user} cif_loc="D:\\path\\to\\your\\CIFs"')
+		print(f'      achdiff profile set -u {user}')
 	return 0
 
 
@@ -666,7 +684,7 @@ def cmd_style_install(args):
 		print(f'[!] No profile {user} is registered yet, so this style is only used')
 		print(f'    when you pass -u {user} explicitly. To have it picked up from')
 		print(f'    your sample-name prefixes as well, register the ID:')
-		print(f'      achdiff profile set -u {user} cif_loc="D:\\path\\to\\your\\CIFs"')
+		print(f'      achdiff profile set -u {user}')
 	return 0
 
 
@@ -784,8 +802,10 @@ def _build_parser():
 
 	p_set = _with_user(prof_sub.add_parser(
 		'set', help='Register or update settings for a person, or for everyone.'))
-	p_set.add_argument('assignments', nargs='+', metavar='KEY=VALUE',
-	                   help='e.g. cif_loc="D:\\Workfolder\\you\\CIF_LOC" qall=true')
+	p_set.add_argument('assignments', nargs='*', metavar='KEY=VALUE',
+	                   help='e.g. cif_loc="D:\\Workfolder\\you\\CIF_LOC" qall=true. '
+	                        'With none, the ID is simply registered -- which is all '
+	                        'that filename inference and a style sheet need.')
 	p_set.add_argument('--global', dest='is_global', action='store_true',
 	                   help='Write [defaults] instead of one person\'s profile: the '
 	                        'value everyone gets without passing -u. A profile that '

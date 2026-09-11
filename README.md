@@ -87,6 +87,16 @@ Unknown setting names are rejected rather than stored, so a typo can't sit in
 your config being silently ignored. From then on, working in a directory of your own
 `CN-` prefixed samples, the tools pick it up automatically:
 
+If you have no CIF library and don't need one, register the ID on its own:
+
+```bash
+achdiff profile set -u CN
+```
+
+A profile decides which CIF library applies, which style sheet applies, and
+whether the tools recognise your filenames at all. Only the last two need a
+profile to exist, so an empty one is a perfectly good profile.
+
 ### One shared library for everyone
 
 `--global` writes `[defaults]` instead of one person's profile, so a machine can
