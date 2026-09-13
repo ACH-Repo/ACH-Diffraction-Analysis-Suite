@@ -189,6 +189,143 @@ def parse_x_values(spec):
 	return values
 
 
+def read_x_map(path):
+	"""A hand-edited run order: `[(fit_name, x), ...]`, in the order written.
+
+	One fit per line, its x value last::
+
+	    # compression
+	    CN-cubic_0GPa_pawley_01      0
+	    CN-cubic_5GPa_pawley_01      5
+	    # decompression, back to check it is reversible
+	    CN-cubic_5GPa-r_pawley_01    5
+
+	The file is the timeline: fits play in the order listed, only listed fits
+	play, and an x value may appear as often as it was measured. That is what a
+	flag cannot express -- a run that goes up and comes back down visits the
+	same pressures twice, so no sort order recovers it and no value list is safe
+	to count by hand across forty fits.
+
+	The x value is the last whitespace-separated token, so fit names may
+	contain spaces. `#` starts a comment; blank lines are ignored.
+
+	Raises ValueError naming the line for anything that is not a name and a
+	number, or for a fit listed twice -- almost always an editing slip, and
+	drawing one measurement twice would put a frame in the animation that was
+	never taken.
+	"""
+	entries, seen = [], {}
+	with open(str(path), encoding='utf-8-sig') as fh:
+		for lineno, raw_line in enumerate(fh, start=1):
+			line = raw_line.split('#', 1)[0].strip()
+			if not line:
+				continue
+			parts = line.rsplit(None, 1)
+			if len(parts) < 2:
+				# No whitespace: a file saved from a spreadsheet, "name;0,5" from a
+				# German Excel or "name,5" from an English one.
+				for sep in (';', ',', '\t'):
+					if sep in line:
+						parts = line.rsplit(sep, 1)
+						break
+			if len(parts) < 2:
+				raise ValueError(f'line {lineno}: "{line}" needs a fit name and an x value')
+			name, value = parts[0].strip().rstrip(',;').strip(), parts[1].strip()
+			number = _sortable(value)
+			if number[0] != 0:
+				raise ValueError(f'line {lineno}: "{value}" is not a number '
+				                 f'(the x value goes last on the line)')
+			x = number[1]
+			if name in seen:
+				raise ValueError(f'line {lineno}: {name} is already listed on line '
+				                 f'{seen[name]}; each fit can appear once')
+			seen[name] = lineno
+			entries.append((name, x))
+	if not entries:
+		raise ValueError('no fits listed')
+	return entries
+
+
+def write_x_map_template(path, names, xs=None, source=''):
+	"""Write a starting point for `read_x_map`: every fit, one per line.
+
+	`xs` pre-fills the values where something could supply them -- typically the
+	number the --sort-key pattern captured from each name -- and leaves the rest
+	blank to be filled in. The header says where the pre-filled values came
+	from, because a guessed value sitting in a file looks exactly like a checked
+	one.
+	"""
+	xs = list(xs) if xs is not None else [None] * len(names)
+	width = max((len(n) for n in names), default=0)
+	lines = [
+		'# Run order and x value for pp --gif --x-map.',
+		'#',
+		'# One fit per line, x value last. Fits play in the order listed, and only',
+		'# listed fits play: move lines to reorder, delete or # a line to leave a fit',
+		'# out. The same x may appear more than once -- a return leg revisits its',
+		'# pressures, and that is exactly what this file is for.',
+		'#',
+		(f'# x values were pre-filled from {source}. Check every one.'
+		 if source else '# Fill in the x value of every fit.'),
+		'',
+	]
+	for name, x in zip(names, xs):
+		value = '' if x is None else f'{x:g}'
+		lines.append(f'{name:<{width}}\t{value}'.rstrip())
+	with open(str(path), 'w', encoding='utf-8', newline='\n') as fh:
+		fh.write('\n'.join(lines) + '\n')
+	return path
+
+
+def first_number(names, pattern):
+	"""The first capture of `pattern` in each name, as a float, or None.
+
+	Used to pre-fill a template from the same pattern the user already wrote for
+	--sort-key, so forty pressures do not have to be typed out by hand.
+	"""
+	regex = re.compile(pattern)
+	out = []
+	for name in names:
+		m = regex.search(str(name))
+		captured = (m.group(1) if (m and regex.groups) else (m.group(0) if m else None))
+		key = _sortable(captured)
+		out.append(key[1] if key[0] == 0 else None)
+	return out
+
+
+def monotonic_legs(xs):
+	"""Split a run into stretches where x only rises or only falls: `[(indices, rising)]`.
+
+	A reversibility run goes up and comes back down over the same pressures, so
+	its return points sit on top of the outbound ones -- which, if the change
+	really is reversible, is the whole result. Drawn as one line with one marker
+	style, the two legs are indistinguishable exactly when they agree. Splitting
+	them lets the trend plot draw each direction differently.
+
+	The turning point belongs to both legs, so the drawn line is continuous.
+	Repeated equal x values extend the leg they are in rather than starting a
+	new one. Purely a matter of the order and values given: nothing here knows
+	what compression is.
+	"""
+	n = len(xs)
+	if n < 2:
+		return [(list(range(n)), True)]
+	legs = []
+	start, direction = 0, 0
+	for i in range(1, n):
+		step = xs[i] - xs[i - 1]
+		sign = (step > 0) - (step < 0)
+		if sign == 0:
+			continue
+		if direction == 0:
+			direction = sign
+		elif sign != direction:
+			legs.append((list(range(start, i)), direction > 0))
+			start, direction = i - 1, sign
+	legs.append((list(range(start, n)), direction >= 0))
+	return legs
+
+
 def parse_value_error(token):
 	"""A TOPAS ``value`_esd`` token as ``(value, error)`` floats.
 
@@ -758,12 +895,38 @@ def render_trend(series, x_label=None, figsize=(6.0, 4.0), title=None,
 	if not ratios:
 		return None
 
+	from matplotlib.lines import Line2D
+
 	fig, ax = plt.subplots(figsize=figsize, layout='constrained')
 	ax.axhline(1.0, color='0.6', linestyle='--', linewidth=0.8, zorder=1)
-	for key, (xs, rs, es) in ratios.items():
+
+	# Every parameter shares one x sequence, so the legs are worked out once.
+	xs_all = next(iter(ratios.values()))[0]
+	legs = monotonic_legs(xs_all)
+	returns = any(not rising for _idx, rising in legs)
+
+	for k, (key, (xs, rs, es)) in enumerate(ratios.items()):
 		sym = _TREND_SYMBOLS.get(key, key)
-		ax.errorbar(xs, rs, yerr=es, marker='o', markersize=4, linewidth=1.0,
-		            capsize=3, elinewidth=0.8, label=f'${sym}/{sym}_0$', zorder=2)
+		color = f'C{k}'
+		for j, (idx, rising) in enumerate(legs):
+			# Filled and solid on the way up, open and dashed on the way back.
+			# A reversible change puts the return points exactly on top of the
+			# outbound ones, and without this they would vanish into them in
+			# precisely the case that matters.
+			#
+			# A later leg starts at the previous leg's last point so the line
+			# joins up, but that turning point was measured once, on the earlier
+			# leg -- so it gets no marker here, or it would be drawn in the
+			# style of a direction it was never measured in.
+			marks = list(range(1, len(idx))) if j > 0 else None
+			ax.errorbar([xs[i] for i in idx], [rs[i] for i in idx],
+			            yerr=[0.0 if (j > 0 and n == 0) else es[i] for n, i in enumerate(idx)],
+			            markevery=marks, color=color, marker='o',
+			            markersize=4 if rising else 5,
+			            markerfacecolor=color if rising else 'white',
+			            linestyle='-' if rising else '--', linewidth=1.0,
+			            capsize=3, elinewidth=0.8, zorder=3 if not rising else 2,
+			            label=f'${sym}/{sym}_0$' if j == 0 else None)
 
 	ax.set_xlabel(x_label or 'fit number', fontsize=label_size)
 	ax.set_ylabel('relative to first fit', fontsize=label_size)
@@ -771,7 +934,14 @@ def render_trend(series, x_label=None, figsize=(6.0, 4.0), title=None,
 	# Offsets make a ratio axis unreadable: "1e-3 + 1" beside the tick labels
 	# is harder work than just printing 0.998.
 	ax.ticklabel_format(axis='y', useOffset=False)
-	ax.legend(fontsize=legend_size, frameon=False)
+
+	handles, labels = ax.get_legend_handles_labels()
+	if returns:
+		handles += [Line2D([], [], color='0.3', marker='o', markersize=4, linestyle='-'),
+		            Line2D([], [], color='0.3', marker='o', markersize=5,
+		                   markerfacecolor='white', linestyle='--')]
+		labels += ['x increasing', 'x decreasing']
+	ax.legend(handles, labels, fontsize=legend_size, frameon=False)
 	if title:
 		ax.set_title(title, fontsize=label_size)
 	return fig

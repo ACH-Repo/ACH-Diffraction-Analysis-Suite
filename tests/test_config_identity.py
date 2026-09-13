@@ -790,6 +790,79 @@ check('coordinates are left exactly as written',
       _compact.count('x="1" y="2"'), 2)
 
 
+# ---------- return legs: --x-map ----------
+# A reversibility run goes up and comes back over the same pressures. No sort
+# order recovers that and no value list is safe to count across forty fits, so
+# the order and the values come from a file the user edits.
+_map_dir = Path(tempfile.mkdtemp())
+_run = ['c_up_0GPa', 'c_up_5GPa', 'c_up_10GPa', 'c_down_5GPa', 'c_down_0GPa']
+_tpl = _map_dir / 'run.txt'
+animate.write_x_map_template(_tpl, _run, [0.0, 5.0, 10.0, None, 0.0], 'a test')
+check('a blank x in a template is refused, not read as zero',
+      _raises(lambda: animate.read_x_map(_tpl)), True)
+_tpl.write_text(_tpl.read_text(encoding='utf-8').replace('c_down_5GPa\n', 'c_down_5GPa  5\n'),
+                encoding='utf-8')
+check('a template reads back once its blanks are filled, in the order written',
+      animate.read_x_map(_tpl),
+      [('c_up_0GPa', 0.0), ('c_up_5GPa', 5.0), ('c_up_10GPa', 10.0),
+       ('c_down_5GPa', 5.0), ('c_down_0GPa', 0.0)])
+check('the template says where pre-filled values came from',
+      'pre-filled from a test' in _tpl.read_text(encoding='utf-8'), True)
+
+_edited = _map_dir / 'edited.txt'
+_edited.write_text('# compression\n'
+                   'c_up_0GPa    0\n'
+                   'c_up_5GPa    5\n'
+                   'c_up_10GPa   10   # turning point\n'
+                   '\n'
+                   '# back down\n'
+                   'c_down_5GPa  5\n'
+                   'c_down_0GPa  0\n', encoding='utf-8')
+check('the file is the timeline, repeated x values and all',
+      animate.read_x_map(_edited),
+      [('c_up_0GPa', 0.0), ('c_up_5GPa', 5.0), ('c_up_10GPa', 10.0),
+       ('c_down_5GPa', 5.0), ('c_down_0GPa', 0.0)])
+
+_spaced = _map_dir / 'spaced.txt'
+_spaced.write_text('MgHPO4 1.2 H2O run 3   2.5\n', encoding='utf-8')
+check('a fit name may contain spaces; the x value is the last token',
+      animate.read_x_map(_spaced), [('MgHPO4 1.2 H2O run 3', 2.5)])
+
+_excel = _map_dir / 'excel.txt'
+_excel.write_text('c_up_0GPa;0\nc_up_0.5GPa;0,5\n', encoding='utf-8')
+check('a spreadsheet export with ; and a decimal comma is read',
+      animate.read_x_map(_excel), [('c_up_0GPa', 0.0), ('c_up_0.5GPa', 0.5)])
+
+_dup = _map_dir / 'dup.txt'
+_dup.write_text('a 0\nb 1\na 2\n', encoding='utf-8')
+check('a fit listed twice is refused -- it would be a frame never measured',
+      _raises(lambda: animate.read_x_map(_dup)), True)
+
+check('pre-filling reads the number a sort pattern captures',
+      animate.first_number(['c_up_0.5GPa', 'calib', 'c_down_10GPa'], r'_([0-9.]+)GPa'),
+      [0.5, None, 10.0])
+
+check('a run up and back is two legs sharing the turning point',
+      animate.monotonic_legs([0, 5, 10, 5, 0]),
+      [([0, 1, 2], True), ([2, 3, 4], False)])
+check('a repeated value does not start a new leg',
+      animate.monotonic_legs([0, 5, 5, 10]), [([0, 1, 2, 3], True)])
+check('a plain run is a single rising leg', animate.monotonic_legs([1, 2, 3]),
+      [([0, 1, 2], True)])
+check('several reversals are several legs',
+      [rising for _i, rising in animate.monotonic_legs([0, 10, 0, 10])],
+      [True, False, True])
+
+_rev = animate.CellSeries('rev')
+for _n, _x, _a in (('u0', 0, '17.0`_0.001'), ('u10', 10, '16.5`_0.001'),
+                   ('d0', 0, '17.0`_0.001')):
+	_rev.add(_n, {'a': _a}, x=float(_x))
+_fig = animate.render_trend(_rev, x_label='p / GPa')
+check('a trend with a return leg says which marker is which way',
+      'x decreasing' in [t.get_text() for t in _fig.axes[0].get_legend().get_texts()], True)
+_plt.close(_fig)
+
+
 print()
 print(f'{len(fails)} failure(s)' + (': ' + ', '.join(fails) if fails else ''))
 sys.exit(1 if fails else 0)

@@ -195,7 +195,19 @@ def _build_parser():
 	                         'even bend the wrong way. Not checked for sense, only '
 	                         'that there is one value per fit.')
 	parser.add_argument('--x-label', default=None, metavar='TEXT',
-	                    help='Axis label for --x-values, e.g. "p / GPa".')
+	                    help='Axis label for --x-values or --x-map, e.g. "p / GPa".')
+	parser.add_argument('--x-map', default=None, metavar='FILE',
+	                    help='A text file giving the run order and x value of each fit, '
+	                         'one "fit-name  x" per line. The file is the timeline: fits '
+	                         'play in the order listed, only listed fits play, and the '
+	                         'same x may repeat -- which is what a run that goes up and '
+	                         'comes back down to test reversibility needs, and what '
+	                         '--sort-key and --x-values cannot express. Replaces both.')
+	parser.add_argument('--x-map-template', default=None, metavar='FILE',
+	                    help='Write a starting --x-map file listing every fit, in the '
+	                         'current order, and exit. With --sort-key, x values are '
+	                         'pre-filled from the number it captures; edit the order '
+	                         'and values, then pass the file back with --x-map.')
 	parser.add_argument('--sort-key', default=None, metavar='REGEX',
 	                    help='Order the fits by what this regular expression captures '
 	                         'from each fit name, compared as numbers where they are '
@@ -1621,6 +1633,11 @@ def main():
 	# out of numerical order was never what anyone wanted either.
 	group_names = sorted(file_dicts, key=animate.natural_key)
 
+	if args.x_map and (args.sort_key or args.x_values is not None):
+		print('[!] --x-map sets both the order and the x values, so it cannot be combined '
+		      'with --sort-key or --x-values. Use one or the other.')
+		raise SystemExit(2)
+
 	# An explicit order replaces the natural one. Natural sort cannot see that
 	# `0.5GPa` belongs after `0GPa` -- it splits at the point and compares the
 	# pieces -- and no filename convention is universal enough to guess from.
@@ -1650,6 +1667,53 @@ def main():
 			raise SystemExit(2)
 		formats = list(dict.fromkeys(formats))   # "gif,gif" means gif once
 
+	runnable = [g for g in group_names if not _missing_pieces(file_dicts[g])]
+
+	if args.x_map_template:
+		prefill, source = None, ''
+		if args.sort_key:
+			prefill = animate.first_number(runnable, args.sort_key)
+			if any(v is not None for v in prefill):
+				source = f'the --sort-key pattern {args.sort_key!r}'
+			else:
+				prefill = None
+		animate.write_x_map_template(args.x_map_template, runnable, prefill, source)
+		filled = sum(v is not None for v in (prefill or []))
+		print(f'[+] {args.x_map_template}  ({len(runnable)} fits'
+		      + (f', {filled} x value(s) pre-filled' if filled else ', x values to fill in') + ')')
+		print('    Put the lines in measurement order, check every x value, then run:')
+		print(f'      pp --gif --x-map "{args.x_map_template}"')
+		return
+
+	if args.x_map:
+		if not args.gif:
+			print('[!] --x-map only applies to --gif; ignoring it.')
+		else:
+			try:
+				entries = animate.read_x_map(args.x_map)
+			except (OSError, ValueError) as e:
+				print(f'[!] --x-map {args.x_map}: {e}')
+				raise SystemExit(2)
+			# Names are checked against the fits that can actually be drawn, so a
+			# typo, a renamed file or a fit missing its difference curve is refused
+			# here -- not discovered as a gap in the finished animation.
+			known = set(runnable)
+			unknown = [name for name, _x in entries if name not in known]
+			if unknown:
+				print(f'[!] --x-map lists {len(unknown)} fit(s) that are not here, or are '
+				      f'missing a data file:')
+				for name in unknown:
+					incomplete = name in file_dicts
+					print(f'      {name}' + ('   (incomplete)' if incomplete else ''))
+				print('    `pp --x-map-template FILE` lists the names exactly as pp sees them.')
+				raise SystemExit(2)
+			group_names = [name for name, _x in entries]
+			x_by_group = dict(entries)
+			left_out = [g for g in runnable if g not in x_by_group]
+			print(f'[*] --x-map: {len(entries)} of {len(runnable)} fits, in the order listed.')
+			if left_out:
+				print(f'    Not listed, so not drawn: {", ".join(left_out)}')
+
 	if args.x_values is not None:
 		if not args.gif:
 			print('[!] --x-values only applies to the trend plot written by --gif; ignoring it.')
@@ -1659,12 +1723,13 @@ def main():
 			except ValueError as e:
 				print(f'[!] --x-values: {e}')
 				raise SystemExit(2)
-			runnable = [g for g in group_names if not _missing_pieces(file_dicts[g])]
 			if len(x_values) != len(runnable):
 				print(f'[!] --x-values gives {len(x_values)} value(s) for {len(runnable)} fit(s). '
 				      f'There has to be exactly one per fit, in the order they are drawn:')
 				for i, g in enumerate(runnable, start=1):
 					print(f'      {i:>3}  {g}')
+				print('    For a run that comes back down, or to leave fits out, write the order')
+				print('    and values to a file instead:  pp --gif --x-map-template run.txt')
 				raise SystemExit(2)
 			x_by_group = dict(zip(runnable, x_values))
 

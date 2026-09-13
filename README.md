@@ -430,6 +430,43 @@ compression that softens looks like one that accelerates. Give a list, a range
 fit, in the order the fits are drawn; if not, `pp` refuses before rendering
 anything and lists the fits in the order it would have used.
 
+#### Runs that come back down: `--x-map`
+
+A reversibility run goes up to pressure and returns over the same values. No
+sort order recovers that — sorted by pressure, the outbound and return fits
+interleave — and a value list is easy to miscount across forty fits. So write
+the order and the values to a file instead:
+
+```bash
+pp --x-map-template run.txt --sort-key "_([0-9.]+)GPa"    # every fit, x pre-filled
+# ...edit run.txt: put the lines in measurement order, check the values...
+pp --gif --x-map run.txt --x-label "p / GPa"
+```
+
+The file is the timeline. One fit per line, x value last:
+
+```text
+# compression
+CN-cubic_up_0GPa_pawley_01      0
+CN-cubic_up_10GPa_pawley_01     10
+# back down
+CN-cubic_down_5GPa_pawley_01    5
+CN-cubic_down_0GPa_pawley_01    0
+```
+
+Fits play in the order listed and only listed fits play, so delete or `#` a line
+to leave a bad fit out. The same x may appear any number of times. Names may
+contain spaces; `#` starts a comment; a spreadsheet export with `;` and a decimal
+comma reads fine. Anything wrong — a name that isn't a fit here, a fit listed
+twice, a value that isn't a number — is refused with its line number before
+anything is drawn. `--x-map` replaces `--sort-key` and `--x-values` and can't be
+combined with them.
+
+In the trend plot the legs are drawn differently: **filled and solid while x
+increases, open and dashed while it decreases.** A reversible change puts the
+return points exactly on top of the outbound ones, so without that distinction
+the return leg would disappear in exactly the case you are trying to show.
+
 #### Animated SVG
 
 ```bash
