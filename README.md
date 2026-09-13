@@ -369,10 +369,10 @@ an unexplained feature belongs to a suspected impurity.
 
 A variable-temperature or time-resolved experiment leaves a directory of fits
 that only mean anything next to each other. `--gif` turns the directory into two
-animations for a talk:
+animations and a trend plot for a talk:
 
 ```bash
-pp --gif                    # <dir>-fits.gif and <dir>-cell.gif
+pp --gif                    # <dir>-fits.gif, <dir>-cell.gif, <dir>-trend.svg
 pp --gif --gif-delay 400    # slower
 pp --gif --gif-absolute     # cell bars as values, not as changes
 ```
@@ -396,6 +396,58 @@ same either way.
 
 Frame resolution is the `gif_dpi` style setting (150 by default), kept apart from
 `dpi` so print output stays print quality without making a GIF nobody can email.
+
+#### The trend plot, and getting the order and the x axis right
+
+`--gif` also writes `<dir>-trend.svg`: every cell parameter **relative to the
+first fit** (a/a₀, V/V₀, …), as a static curve. That is the plot that shows
+non-linear behaviour — curvature belongs to the whole run, and an animation
+shows one frame at a time. Uncertainties are propagated through the ratio, and
+the first point is exactly 1 with no error, since it is 1 by definition. Points
+are joined in measurement order, so a compression-then-decompression run draws
+its loop. Nothing is fitted.
+
+Two things decide whether that curve means anything, and both are yours to get
+right — neither is checked:
+
+```bash
+pp --gif --sort-key "_([0-9.]+)GPa"                        # the order
+pp --gif --x-values "0,0.5,1:2:0.5,3,4.5,6,8,10" --x-label "p / GPa"   # the x axis
+```
+
+**Order.** Fits play in natural order unless `--sort-key` says otherwise, and
+natural order gets decimals wrong: it splits `0.5GPa` at the point and puts it
+*before* `0GPa`. `--sort-key` is a regular expression whose capture groups are
+the sort key, compared as numbers where they are numbers (a decimal comma is
+fine). Several groups sort left to right. Fits it doesn't match are kept, named,
+and put last.
+
+**x values.** Without `--x-values` the x axis is the fit number, which assumes
+evenly spaced steps. That's usually true, but when it isn't the curve can bend
+the **wrong way** — measure at 0.5 GPa steps early and 2 GPa steps late, and a
+compression that softens looks like one that accelerates. Give a list, a range
+`start:stop:step` (stop included), or both. There must be exactly one value per
+fit, in the order the fits are drawn; if not, `pp` refuses before rendering
+anything and lists the fits in the order it would have used.
+
+#### Animated SVG
+
+```bash
+pp --gif --gif-format svg        # or gif,svg for both
+```
+
+One self-contained SVG, animated with SMIL — no scripts, plays in any browser,
+stays sharp at any size and isn't limited to 256 colours.
+
+**It will not animate in PowerPoint**, which does not play SVG animation. The
+file is built so that anything drawing it without running the animation shows
+the first frame rather than every frame stacked — but for slides, use GIF.
+
+Fit animations are large as SVG: every observed point is its own element, so
+expect a few hundred KB per frame (a 10-fit run with ~6,000 points per pattern
+is about 6 MB). The file is already stripped of styling that duplicates what it
+points to, which is exact; coordinate rounding would shave off a little more
+but moves antialiased edges, so it isn't done.
 
 ### `pq` — quickplot
 

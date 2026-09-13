@@ -664,6 +664,132 @@ check('mismatched frame sizes are refused with a reason',
           [_frames[0], _frames[0].resize((10, 10))], _gif)), True)
 
 
+# ---------- ordering a run: --sort-key ----------
+# Natural sort splits "0.5" at the point and compares the pieces, so it puts
+# 0.5GPa before 0GPa. That is the case the flag exists for.
+_press = ['c_0.5GPa', 'c_0GPa', 'c_1.5GPa', 'c_1GPa', 'c_10GPa', 'c_2GPa']
+check('natural sort gets decimal pressures wrong -- why --sort-key exists',
+      sorted(_press, key=animate.natural_key)[:2], ['c_0.5GPa', 'c_0GPa'])
+check('a sort key compares what it captures as numbers',
+      animate.sort_by_pattern(_press, r'_([0-9.]+)GPa'),
+      (['c_0GPa', 'c_0.5GPa', 'c_1GPa', 'c_1.5GPa', 'c_2GPa', 'c_10GPa'], []))
+check('several groups sort left to right',
+      animate.sort_by_pattern(['T300_r2', 'T100_r10', 'T100_r2'], r'T(\d+)_r(\d+)')[0],
+      ['T100_r2', 'T100_r10', 'T300_r2'])
+check('a decimal comma counts as a decimal point',
+      animate.sort_by_pattern(['p_1,5GPa', 'p_0,5GPa', 'p_10GPa'], r'_([0-9,]+)GPa')[0],
+      ['p_0,5GPa', 'p_1,5GPa', 'p_10GPa'])
+check('names the key does not match are kept and handed back, not dropped',
+      animate.sort_by_pattern(['r_2GPa', 'calib', 'r_1GPa'], r'_(\d+)GPa'),
+      (['r_1GPa', 'r_2GPa'], ['calib']))
+check('an invalid expression is refused rather than sorting by nothing',
+      _raises(lambda: animate.sort_by_pattern(['a'], '_([0-9')), True)
+
+
+# ---------- x values: --x-values ----------
+check('a plain list', animate.parse_x_values('0,0.5,1,2'), [0.0, 0.5, 1.0, 2.0])
+check('a range includes its stop', animate.parse_x_values('0:10:2'),
+      [0.0, 2.0, 4.0, 6.0, 8.0, 10.0])
+check('a range counts rather than accumulates, so 0:1:0.1 has eleven values',
+      len(animate.parse_x_values('0:1:0.1')), 11)
+check('a range can step down, for a decompression run',
+      animate.parse_x_values('4:0:-2'), [4.0, 2.0, 0.0])
+check('lists and ranges join in the order written',
+      animate.parse_x_values('0,0.5,1:2:0.5'), [0.0, 0.5, 1.0, 1.5, 2.0])
+check('whitespace separates as well as commas',
+      animate.parse_x_values('0 1  2'), [0.0, 1.0, 2.0])
+for _bad in ('0:10:-1', '0:10:0', '0:10', 'a,b', ''):
+	check(f'refused: {_bad!r}', _raises(lambda: animate.parse_x_values(_bad)), True)
+
+
+# ---------- the trend plot ----------
+_trend = animate.CellSeries('cubic')
+_trend.add('p0', {'a': '17.0000`_0.0010', 'V': '4913.0`_0.9'}, x=0.0)
+_trend.add('p1', {'a': '16.8300`_0.0020', 'V': '4767.1`_1.7'}, x=2.5)
+_trend.add('p2', {'a': '16.6600`_0.0020', 'V': '4624.0`_1.7'}, x=10.0)
+_ratios = animate.ratio_series(_trend)
+
+check('the trend carries the volume as well as the cell edge',
+      sorted(_ratios), ['V', 'a'])
+check('x comes from the values given, not the position in the run',
+      _ratios['a'][0], [0.0, 2.5, 10.0])
+check('every parameter starts at exactly 1',
+      [_ratios[k][1][0] for k in ('a', 'V')], [1.0, 1.0])
+check('...and the first point carries no error, since it is 1 by definition',
+      [_ratios[k][2][0] for k in ('a', 'V')], [0.0, 0.0])
+check('the ratio is the value over the first value',
+      round(_ratios['a'][1][2], 6), round(16.66 / 17.0, 6))
+# sigma(r) = r * sqrt((s/p)^2 + (s0/p0)^2), independent errors
+check('uncertainty is propagated through the division, not copied across',
+      round(_ratios['a'][2][2], 9),
+      round((16.66 / 17.0) * ((0.002 / 16.66) ** 2 + (0.001 / 17.0) ** 2) ** 0.5, 9))
+
+_even = animate.CellSeries('cubic')
+for _i, _a in enumerate(('17.0`_0.001', '16.9`_0.001', '16.8`_0.001')):
+	_even.add(f'p{_i}', {'a': _a})
+check('without x values the axis is the fit number, from 1',
+      animate.ratio_series(_even)['a'][0], [1.0, 2.0, 3.0])
+
+# A fit whose .out held no cell is absent from the series but still used up its
+# x value. Aligning by position would slide every later point onto its
+# neighbour's pressure.
+_gap = animate.CellSeries('gap')
+_gap.add('p0', {'a': '17.0`_0.001'}, x=0.0)
+_gap.add('p1', {}, x=1.0)                          # nothing parsed: not recorded
+_gap.add('p2', {'a': '16.8`_0.001'}, x=5.0)
+check('a fit with no cell keeps later points on their own x values',
+      animate.ratio_series(_gap)['a'][0], [0.0, 5.0])
+
+check('the volume stays out of the bar chart, which has no axis for it',
+      _trend.keys(), ['a'])
+
+
+# ---------- animated SVG ----------
+import matplotlib.pyplot as _plt  # noqa: E402
+
+_svg_frames = []
+for _k in range(3):
+	_fig, _ax = _plt.subplots(figsize=(3, 2))
+	_ax.plot([0, 1, 2], [_k, 1, 2 - _k], 'x-')
+	_ax.set_title(f'frame {_k}')
+	_svg_frames.append(animate.figure_to_svg(_fig))
+	_plt.close(_fig)
+_svg_path = Path(tempfile.mkdtemp()) / 'anim.svg'
+animate.write_animated_svg(_svg_frames, _svg_path, delay_ms=200)
+_svg_text = _svg_path.read_text(encoding='utf-8')
+
+import re as _re  # noqa: E402
+_ids = _re.findall(r'\bid="([^"]+)"', _svg_text)
+check('one group per frame', len(_re.findall(r'<g id="frame\d+"', _svg_text)), 3)
+check('every id is unique once the frames share one document',
+      len(_ids) - len(set(_ids)), 0)
+check('every reference points at an id that exists',
+      sorted(set(_re.findall(r'(?:url\(#|href="#)([^)"]+)', _svg_text)) - set(_ids)), [])
+check('only the first frame is drawn when the animation does not run',
+      _re.findall(r'<g id="frame\d+" display="(\w+)"', _svg_text),
+      ['inline', 'none', 'none'])
+check('the cycle lasts one delay per frame and loops',
+      ('dur="0.600s"' in _svg_text, 'repeatCount="indefinite"' in _svg_text), (True, True))
+check('frames on different canvases are refused',
+      _raises(lambda: animate.write_animated_svg(
+          [_svg_frames[0], _svg_frames[0].replace('width="216pt"', 'width="300pt"', 1)],
+          _svg_path)), True)
+
+# Exact only: a style identical to the marker's own does nothing and goes; one
+# that adds a property (a Bragg tick's fill) is load-bearing and stays.
+_body = ('<path id="m1" d="M 0 0" style="stroke: #000000; stroke-width: 0.6"/>'
+         '<path id="m2" d="M 0 0" style="stroke: #0000ff"/>'
+         '<use xlink:href="#m1" x="1" y="2" style="stroke: #000000; stroke-width: 0.6"/>'
+         '<use xlink:href="#m2" x="1" y="2" style="fill: #0000ff; stroke: #0000ff"/>')
+_compact = animate._compact(_body)
+check('a <use> style identical to its marker\'s is dropped',
+      '<use xlink:href="#m1" x="1" y="2"/>' in _compact, True)
+check('a <use> style that adds anything is kept',
+      'style="fill: #0000ff; stroke: #0000ff"' in _compact, True)
+check('coordinates are left exactly as written',
+      _compact.count('x="1" y="2"'), 2)
+
+
 print()
 print(f'{len(fails)} failure(s)' + (': ' + ', '.join(fails) if fails else ''))
 sys.exit(1 if fails else 0)

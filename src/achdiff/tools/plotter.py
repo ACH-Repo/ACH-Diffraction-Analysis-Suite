@@ -181,6 +181,27 @@ def _build_parser():
 	parser.add_argument('--gif-name', default=None, metavar='NAME',
 	                    help='Stem for the GIF filenames. Defaults to the name of the '
 	                         'directory being animated.')
+	parser.add_argument('--gif-format', default='gif', metavar='FMT',
+	                    help='Animation format: gif, svg, or gif,svg for both '
+	                         '(default: %(default)s). An animated SVG stays sharp at '
+	                         'any size and plays in a browser, but PowerPoint shows '
+	                         'SVG as a still image -- use gif for slides.')
+	parser.add_argument('--x-values', default=None, metavar='SPEC',
+	                    help='The x value of each fit for the trend plot, in the '
+	                         'order the fits are drawn: a list "0,0.5,1,2", a range '
+	                         '"0:10:2" (stop included), or both "0,0.5,1:5:1". '
+	                         'Without it the x axis is the fit number, which assumes '
+	                         'evenly spaced steps -- with uneven ones the curve can '
+	                         'even bend the wrong way. Not checked for sense, only '
+	                         'that there is one value per fit.')
+	parser.add_argument('--x-label', default=None, metavar='TEXT',
+	                    help='Axis label for --x-values, e.g. "p / GPa".')
+	parser.add_argument('--sort-key', default=None, metavar='REGEX',
+	                    help='Order the fits by what this regular expression captures '
+	                         'from each fit name, compared as numbers where they are '
+	                         'numbers: "_([0-9.]+)GPa" sorts by pressure. Fits it does '
+	                         'not match are kept, reported, and put last. The order is '
+	                         'taken as given, not checked.')
 	parser.add_argument('--style', default=None, metavar='FILE',
 	                    help='Style sheet to layer on top of the one -u already '
 	                         'selects. Use it for a one-off look -- a journal\'s '
@@ -1436,7 +1457,23 @@ def _series_scale(group_names, file_dicts):
 	return min(lows), max(highs), max(amplitudes or [0.0])
 
 
-def _collect_cell_series(cell_series, group_name, outfile_path, tick_meta):
+def _missing_pieces(group_dict):
+	"""The file types a group lacks, or [] when it can be plotted.
+
+	Shared by the plotting loop and the up-front count that --x-values is checked
+	against, so the two can never disagree about which fits make it into the run.
+	"""
+	if len(group_dict) < 3:
+		return ['(fewer than three files)']
+	sorted_filegroup = sort_filegroup(group_dict)
+	pieces = (('X_Yobs', _pick_by_ident(sorted_filegroup, settings['X_Yobs_ident'])),
+	          ('Out_X_Ycalc', _pick_by_ident(sorted_filegroup, settings['Out_X_Ycalc_ident'])),
+	          ('X_Difference', _pick_by_ident(sorted_filegroup, settings['X_Difference_ident'])),
+	          ('2Th_Ip', [t for t in sorted_filegroup if settings['2Th_Ip_ident'] in t[0]]))
+	return [name for name, val in pieces if not val]
+
+
+def _collect_cell_series(cell_series, group_name, outfile_path, tick_meta, x=None):
 	"""Record this fit's cell parameters into a per-phase series.
 
 	Keyed by phase ordinal rather than by name: a phase's substance can be
@@ -1452,49 +1489,86 @@ def _collect_cell_series(cell_series, group_name, outfile_path, tick_meta):
 
 	for phase_i, (_sg_raw, cell_raw) in enumerate(get_unit_cell_raw(outfile_path)):
 		params = {label: token for label, token in cell_raw
-		          if label in animate.CELL_KEYS}
+		          if label in animate.TREND_KEYS}
 		if not params:
 			continue
 		series = cell_series.get(phase_i)
 		if series is None:
 			series = animate.CellSeries(names.get(phase_i, f'phase {phase_i + 1}'))
 			cell_series[phase_i] = series
-		series.add(group_name, params)
+		series.add(group_name, params, x=x)
 
 
-def _write_gifs(frames, cell_series, stem, delay_ms, relative=True):
-	"""Write the fit animation and one cell animation per phase."""
+def _write_animation(frames, fmt, path, delay_ms):
+	if fmt == 'svg':
+		animate.write_animated_svg(frames, path, delay_ms=delay_ms)
+	else:
+		animate.write_gif(frames, path, delay_ms=delay_ms)
+
+
+def _write_animations(frames_by_format, cell_series, stem, delay_ms, relative=True,
+                      x_label=None, have_x=False):
+	"""Write the fit animation, one cell animation per phase, and the trend plots."""
 	stem = stem or Path(os.path.abspath(settings['start_dir'])).name or 'fits'
+	formats = list(frames_by_format)
+	n_frames = max((len(f) for f in frames_by_format.values()), default=0)
 
-	if not frames:
+	if not n_frames:
 		print('[!] No fits to animate.')
 		return
-	if len(frames) < 2:
+	if n_frames < 2:
 		print('[!] Only one fit here, so there is nothing to animate. '
 		      'Use -s for a single plot.')
 		return
 
-	fits_path = f'{stem}-fits.gif'
-	animate.write_gif(frames, fits_path, delay_ms=delay_ms)
-	print(f'[+] {fits_path}  ({len(frames)} frames, {delay_ms} ms each)')
+	for fmt in formats:
+		fits_path = f'{stem}-fits.{fmt}'
+		_write_animation(frames_by_format[fmt], fmt, fits_path, delay_ms)
+		print(f'[+] {fits_path}  ({n_frames} frames, {delay_ms} ms each)')
 
 	multi = len(cell_series) > 1
+	capture = {'gif': lambda fig: animate.figure_to_frame(fig, dpi=settings['gif_dpi']),
+	           'svg': animate.figure_to_svg}
 	for phase_i in sorted(cell_series):
 		series = cell_series[phase_i]
+		suffix = f'-p{phase_i + 1}' if multi else ''
 		if len(series) < 2:
 			print(f'[!] {series.name}: only {len(series)} fit(s) carried cell '
-			      f'parameters, so no cell animation was written.')
+			      f'parameters, so no cell animation or trend plot was written.')
 			continue
-		cell_frames = animate.render_cell_frames(
-			series, figsize=settings['figsize'], dpi=settings['gif_dpi'],
-			title=series.name if multi else None, relative=relative)
-		if not cell_frames:
+
+		for fmt in formats:
+			cell_frames = animate.render_cell_frames(
+				series, figsize=settings['figsize'], dpi=settings['gif_dpi'],
+				title=series.name if multi else None, relative=relative,
+				capture=capture[fmt])
+			if not cell_frames:
+				continue
+			cell_path = f'{stem}-cell{suffix}.{fmt}'
+			_write_animation(cell_frames, fmt, cell_path, delay_ms)
+			print(f'[+] {cell_path}  ({len(cell_frames)} frames, '
+			      f'{", ".join(k.lstrip(chr(92)) for k in series.keys())})')
+
+		fig = animate.render_trend(
+			series, x_label=x_label if have_x else None,
+			figsize=settings['figsize'], title=series.name if multi else None,
+			label_size=settings['size_axis_labels'], tick_size=settings['size_tick_labels'],
+			legend_size=settings['legend_fontsize'])
+		if fig is None:
 			continue
-		suffix = f'-cell-p{phase_i + 1}' if multi else '-cell'
-		cell_path = f'{stem}{suffix}.gif'
-		animate.write_gif(cell_frames, cell_path, delay_ms=delay_ms)
-		print(f'[+] {cell_path}  ({len(cell_frames)} frames, '
-		      f'{", ".join(k.lstrip(chr(92)) for k in series.keys())})')
+		trend_path = f'{stem}-trend{suffix}.{settings["extension"]}'
+		fig.savefig(trend_path, dpi=settings['dpi'], bbox_inches='tight',
+		            transparent=settings['transparent'])
+		plt.close(fig)
+		keys = ', '.join(k.lstrip(chr(92)) for k in series.keys(order=animate.TREND_KEYS))
+		print(f'[+] {trend_path}  ({keys} relative to the first fit)')
+
+	if cell_series and not have_x:
+		# Said once, not per file: the plot is still right in the usual case of
+		# evenly spaced steps, but a slope read off it is only as good as that
+		# assumption, and nothing on the plot itself would say it was made.
+		print('[*] Trend x axis is the fit number, which assumes evenly spaced steps. '
+		      'Pass --x-values for a quantitative axis.')
 
 
 def main():
@@ -1547,11 +1621,58 @@ def main():
 	# out of numerical order was never what anyone wanted either.
 	group_names = sorted(file_dicts, key=animate.natural_key)
 
+	# An explicit order replaces the natural one. Natural sort cannot see that
+	# `0.5GPa` belongs after `0GPa` -- it splits at the point and compares the
+	# pieces -- and no filename convention is universal enough to guess from.
+	if args.sort_key:
+		try:
+			group_names, unmatched = animate.sort_by_pattern(group_names, args.sort_key)
+		except ValueError as e:
+			print(f'[!] --sort-key: {e}')
+			raise SystemExit(2)
+		if unmatched:
+			print(f'[!] --sort-key matched nothing in {len(unmatched)} fit(s); '
+			      f'they are kept and placed last: {", ".join(unmatched)}')
+			group_names = group_names + unmatched
+		print(f'[*] Order from --sort-key: {", ".join(group_names)}')
+
+	# Everything about the run that can be refused is refused here, before any
+	# frame is rendered -- a mistyped value list should cost a second, not the
+	# minute it takes to draw forty plots first.
+	formats = []
+	x_by_group = {}
+	if args.gif:
+		formats = [f.strip().lower() for f in str(args.gif_format).split(',') if f.strip()]
+		bad = [f for f in formats if f not in animate.ANIMATION_FORMATS]
+		if bad or not formats:
+			print(f'[!] --gif-format: {", ".join(bad) or "nothing given"} is not one of '
+			      f'{", ".join(animate.ANIMATION_FORMATS)}.')
+			raise SystemExit(2)
+		formats = list(dict.fromkeys(formats))   # "gif,gif" means gif once
+
+	if args.x_values is not None:
+		if not args.gif:
+			print('[!] --x-values only applies to the trend plot written by --gif; ignoring it.')
+		else:
+			try:
+				x_values = animate.parse_x_values(args.x_values)
+			except ValueError as e:
+				print(f'[!] --x-values: {e}')
+				raise SystemExit(2)
+			runnable = [g for g in group_names if not _missing_pieces(file_dicts[g])]
+			if len(x_values) != len(runnable):
+				print(f'[!] --x-values gives {len(x_values)} value(s) for {len(runnable)} fit(s). '
+				      f'There has to be exactly one per fit, in the order they are drawn:')
+				for i, g in enumerate(runnable, start=1):
+					print(f'      {i:>3}  {g}')
+				raise SystemExit(2)
+			x_by_group = dict(zip(runnable, x_values))
+
 	# An animation has to be scaled to the whole series before its first frame is
 	# drawn, so the data is read once up front. Cheap next to the plotting, and it
 	# is the only way the frames can be comparable to each other.
 	common_scale = None
-	gif_frames = []
+	frames_by_format = {fmt: [] for fmt in formats}
 	cell_series = {}
 	if args.gif:
 		args.silent = True
@@ -1562,6 +1683,13 @@ def main():
 		if len(group_dict) < 3:
 			continue
 
+		# The same test the --x-values count was made against, so a fit is either
+		# drawn and given its value or skipped and given none -- never one of each.
+		missing = _missing_pieces(group_dict)
+		if missing:
+			print(f"Skipping group '{group_name}': missing file type(s) {missing}.")
+			continue
+
 		sorted_filegroup = sort_filegroup(group_dict)
 
 		# Resolve files by type rather than positional index, so groups with missing
@@ -1570,13 +1698,6 @@ def main():
 		calc_file = _pick_by_ident(sorted_filegroup, settings['Out_X_Ycalc_ident'])
 		dif_file  = _pick_by_ident(sorted_filegroup, settings['X_Difference_ident'])
 		pos_files = [t for t in sorted_filegroup if settings['2Th_Ip_ident'] in t[0]]
-
-		missing = [name for name, val in
-		           (('X_Yobs', exp_file), ('Out_X_Ycalc', calc_file),
-		            ('X_Difference', dif_file), ('2Th_Ip', pos_files)) if not val]
-		if missing:
-			print(f"Skipping group '{group_name}': missing file type(s) {missing}.")
-			continue
 
 		# Locate the .out — may be at a different basename than the data files,
 		# or absent entirely (in which case metadata silently disappears but the
@@ -1709,9 +1830,14 @@ def main():
 		if args.gif:
 			# No bbox_inches='tight' here, unlike the saved-file path: tight crops
 			# to the artists, so a frame whose labels are a character wider comes
-			# out a different size and the GIF cannot be assembled at all.
-			gif_frames.append(animate.figure_to_frame(fig, dpi=settings['gif_dpi']))
-			_collect_cell_series(cell_series, group_name, outfile_path, tick_meta)
+			# out a different size and the animation cannot be assembled at all.
+			if 'gif' in frames_by_format:
+				frames_by_format['gif'].append(
+					animate.figure_to_frame(fig, dpi=settings['gif_dpi']))
+			if 'svg' in frames_by_format:
+				frames_by_format['svg'].append(animate.figure_to_svg(fig))
+			_collect_cell_series(cell_series, group_name, outfile_path, tick_meta,
+			                     x=x_by_group.get(group_name))
 			plt.close(fig)
 		elif args.silent:
 			outfile_name = f"{group_name}.{settings['extension']}"
@@ -1722,8 +1848,9 @@ def main():
 			plt.show()
 
 	if args.gif:
-		_write_gifs(gif_frames, cell_series, args.gif_name, args.gif_delay,
-		            relative=not args.gif_absolute)
+		_write_animations(frames_by_format, cell_series, args.gif_name, args.gif_delay,
+		                  relative=not args.gif_absolute,
+		                  x_label=args.x_label or 'x', have_x=bool(x_by_group))
 
 
 if __name__ == '__main__':
