@@ -1,6 +1,6 @@
 """Plot PXRD data files of various formats stacked on a single axis.
 
-Supports: .xy, .txt, .csv, .dat (Riet7), .raw (Bruker RAW1.01, native),
+Supports: .xy, .txt, .csv, .dat (Riet7), .raw (Bruker RAW1.01 and RAW4.00, native),
 .brml (Bruker), .cif (simulated).
 """
 
@@ -222,7 +222,7 @@ def read_xy(path):
 
 
 def read_raw(path):
-	"""Bruker .raw (RAW1.01) read natively -- see ``core.bruker``.
+	"""Bruker .raw (RAW1.01 or RAW4.00) read natively -- see ``core.bruker``.
 
 	Previously this shelled out to TOPAS7 tc.exe to convert the file to .xy,
 	which made plotting depend on a licensed local install. The native reader

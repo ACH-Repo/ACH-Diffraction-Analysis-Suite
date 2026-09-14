@@ -181,7 +181,7 @@ def read_dat(path):
 
 
 def read_raw(path):
-	"""Bruker .raw (RAW1.01) read natively -- see ``core.bruker``. No TOPAS
+	"""Bruker .raw (RAW1.01 or RAW4.00) read natively -- see ``core.bruker``. No TOPAS
 	conversion step, so prefitting works on a machine without TOPAS."""
 	return bruker.read_raw(path)
 

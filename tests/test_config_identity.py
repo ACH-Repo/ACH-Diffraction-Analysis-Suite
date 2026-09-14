@@ -921,6 +921,84 @@ check('...and every frame is the same size, or the GIF cannot be assembled',
       len({f.size for f in _step_frames}), 1)
 
 
+# ---------- Bruker RAW4.00 ----------
+# Built from bytes laid out as the reverse-engineered format says, so the tests
+# need no lab data in the repository. The layout itself was validated against
+# 37 real files with independent .brml/.xy/.dat copies of the same scans.
+import struct as _struct  # noqa: E402
+
+from achdiff.core import bruker  # noqa: E402
+
+
+def _raw4(counts=(100.0, 250.0, 175.0), start=4.0001, step=0.0204, scan='Locked Coupled',
+          axis_start='same', datum=4, ranges=1, cut=0, sample='CN-test'):
+	"""A RAW4.00 file as bytes."""
+	def keyval(key, value):
+		body = key.encode().ljust(24, b'\0') + value.encode()
+		return _struct.pack('<III', 10, 12 + len(body), 0) + body
+
+	meta = keyval('USER', 'Lab Manager') + keyval('SAMPLEID', sample)
+	header = bytearray(61)
+	header[:8] = b'RAW4.00\0'
+	_struct.pack_into('<I', header, 56, len(meta))
+
+	def one_range():
+		axes = b''
+		if axis_start is not None:
+			value = start if axis_start == 'same' else axis_start
+			rec = bytearray(92)
+			_struct.pack_into('<III', rec, 0, 50, 92, 2)
+			rec[12:12 + 6] = b'2Theta'
+			_struct.pack_into('<d', rec, 56, value)
+			axes = bytes(rec)
+		rh = bytearray(160)
+		rh[32:32 + len(scan)] = scan.encode()
+		_struct.pack_into('<d', rh, 72, start)
+		_struct.pack_into('<d', rh, 80, step)
+		_struct.pack_into('<I', rh, 88, len(counts))
+		_struct.pack_into('<I', rh, 136, datum)
+		_struct.pack_into('<I', rh, 140, len(axes))
+		return bytes(rh) + axes + _struct.pack(f'<{len(counts)}f', *counts)
+
+	data = bytes(header) + meta + one_range() * ranges
+	return data[:len(data) - cut] if cut else data
+
+
+_x, _y = bruker.read_raw4(_raw4(), 't.raw')
+check('RAW4 intensities are read exactly', _y.tolist(), [100.0, 250.0, 175.0])
+check('RAW4 2theta runs from the start in the given steps',
+      [round(v, 6) for v in _x], [4.0001, 4.0205, 4.0409])
+check('RAW4 metadata is readable', bruker.raw4_metadata(_raw4())['SAMPLEID'], 'CN-test')
+
+_rawfile = Path(tempfile.mkdtemp()) / 'scan.raw'
+_rawfile.write_bytes(_raw4())
+check('read_raw dispatches RAW4 files on their magic',
+      bruker.read_raw(_rawfile)[1].tolist(), [100.0, 250.0, 175.0])
+
+# The trap RAW1.01 has at +8, handled explicitly here: +72 is the start of the
+# axis that DRIVES the scan, which is 2theta only for a coupled scan.
+check('a scan whose 2Theta axis disagrees with its start is refused, not drawn on the wrong axis',
+      _raises(lambda: bruker.read_raw4(_raw4(axis_start=2.00005), 't.raw')), True)
+check('a non-coupled scan with no 2Theta axis record is refused',
+      _raises(lambda: bruker.read_raw4(_raw4(scan='Omega Scan', axis_start=None), 't.raw')), True)
+check('a coupled scan without the axis record still reads, as every file seen is coupled',
+      bruker.read_raw4(_raw4(axis_start=None), 't.raw')[1].tolist(), [100.0, 250.0, 175.0])
+check('a data width other than float32 is refused rather than guessed',
+      _raises(lambda: bruker.read_raw4(_raw4(datum=8), 't.raw')), True)
+check('a file cut short inside its data is refused',
+      _raises(lambda: bruker.read_raw4(_raw4(cut=3), 't.raw')), True)
+check('a second range does not change what the first reads as',
+      bruker.read_raw4(_raw4(ranges=2), 't.raw')[1].tolist(), [100.0, 250.0, 175.0])
+
+_old = Path(tempfile.mkdtemp()) / 'old.raw'
+_old.write_bytes(b'RAW2' + bytes(800))
+try:
+	bruker.read_raw(_old)
+	check('an unsupported variant names what IS supported', 'no raise', 'ValueError')
+except ValueError as e:
+	check('an unsupported variant names what IS supported', 'RAW4.00' in str(e), True)
+
+
 print()
 print(f'{len(fails)} failure(s)' + (': ' + ', '.join(fails) if fails else ''))
 sys.exit(1 if fails else 0)

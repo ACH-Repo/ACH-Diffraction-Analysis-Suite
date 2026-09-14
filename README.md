@@ -523,11 +523,25 @@ pq -i *.brml -s -x png              # save without a window
 Reads `.xy`, `.raw`, `.brml`, `.dat`, PDF-card XML exports. Same `-r` reflection
 overlay as `pp`.
 
-Bruker `.raw` (RAW1.01) files are decoded natively — no TOPAS conversion step,
-so plotting works on a machine without a TOPAS licence. The reader was verified
-against PowDLL's RIET7 export: identical 2θ grid, identical intensities. Older
-RAW generations (RAW2/3/4) are not covered and still need PowDLL or TOPAS to
-convert; they raise a message saying so rather than plotting nonsense.
+Bruker `.raw` files are decoded natively — no TOPAS conversion step, so plotting
+works on a machine without a TOPAS licence. Two generations are covered:
+
+- **RAW1.01**, verified against PowDLL's RIET7 export: identical 2θ grid,
+  identical intensities.
+- **RAW4.00** (DIFFRAC.SUITE, and what `BrmlToV4Converter` writes from a
+  `.brml`), verified against 37 lab files that have an independent copy of the
+  same scan beside them — four `.brml` originals and 33 `.xy`/`.dat` exports.
+  Every intensity matches exactly, and 2θ agrees within each reference's own
+  rounding.
+
+For RAW4 the 2θ axis is read from the scan's own `2Theta` axis record. A scan
+that doesn't step in 2θ is refused rather than drawn on the wrong axis. Every
+RAW4 file checked so far was a single-range "Locked Coupled" scan from one
+converter; other scan types are read with a warning that they haven't been
+checked against a reference.
+
+RAW2/RAW3 and the old DIFFRAC-AT formats are not covered and still need PowDLL
+or TOPAS; they raise a message saying so rather than plotting nonsense.
 
 ### `pt` — lattice-parameter tables
 
