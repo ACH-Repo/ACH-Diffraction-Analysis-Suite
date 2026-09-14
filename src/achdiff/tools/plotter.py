@@ -186,6 +186,12 @@ def _build_parser():
 	                         '(default: %(default)s). An animated SVG stays sharp at '
 	                         'any size and plays in a browser, but PowerPoint shows '
 	                         'SVG as a still image -- use gif for slides.')
+	parser.add_argument('--gif-rolling', type=int, default=animate.DEFAULT_ROLLING, metavar='N',
+	                    help='Window of the rolling mean drawn over the step chart, in '
+	                         'steps (default: %(default)s; 0 turns it off). Only drawn once '
+	                         'a full window exists within one leg of the run, and never '
+	                         'across a turning point. Meaningful for evenly spaced steps: '
+	                         'with uneven ones, each bar also carries its step size.')
 	parser.add_argument('--x-values', default=None, metavar='SPEC',
 	                    help='The x value of each fit for the trend plot, in the '
 	                         'order the fits are drawn: a list "0,0.5,1,2", a range '
@@ -1519,8 +1525,8 @@ def _write_animation(frames, fmt, path, delay_ms):
 
 
 def _write_animations(frames_by_format, cell_series, stem, delay_ms, relative=True,
-                      x_label=None, have_x=False):
-	"""Write the fit animation, one cell animation per phase, and the trend plots."""
+                      x_label=None, have_x=False, rolling=animate.DEFAULT_ROLLING):
+	"""Write the fit animation and, per phase, the cell and step animations and the trend plot."""
 	stem = stem or Path(os.path.abspath(settings['start_dir'])).name or 'fits'
 	formats = list(frames_by_format)
 	n_frames = max((len(f) for f in frames_by_format.values()), default=0)
@@ -1560,6 +1566,17 @@ def _write_animations(frames_by_format, cell_series, stem, delay_ms, relative=Tr
 			_write_animation(cell_frames, fmt, cell_path, delay_ms)
 			print(f'[+] {cell_path}  ({len(cell_frames)} frames, '
 			      f'{", ".join(k.lstrip(chr(92)) for k in series.keys())})')
+
+			step_frames = animate.render_step_frames(
+				series, figsize=settings['figsize'], dpi=settings['gif_dpi'],
+				title=series.name if multi else None, x_label=x_label, have_x=have_x,
+				window=rolling, label_size=settings['size_axis_labels'] - 1,
+				tick_size=settings['size_tick_labels'] - 1,
+				legend_size=settings['legend_fontsize'], capture=capture[fmt])
+			if step_frames:
+				step_path = f'{stem}-steps{suffix}.{fmt}'
+				_write_animation(step_frames, fmt, step_path, delay_ms)
+				print(f'[+] {step_path}  ({len(step_frames)} frames, change since previous fit)')
 
 		fig = animate.render_trend(
 			series, x_label=x_label if have_x else None,
@@ -1915,7 +1932,8 @@ def main():
 	if args.gif:
 		_write_animations(frames_by_format, cell_series, args.gif_name, args.gif_delay,
 		                  relative=not args.gif_absolute,
-		                  x_label=args.x_label or 'x', have_x=bool(x_by_group))
+		                  x_label=args.x_label or 'x', have_x=bool(x_by_group),
+		                  rolling=max(int(args.gif_rolling), 0))
 
 
 if __name__ == '__main__':

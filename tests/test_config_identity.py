@@ -863,6 +863,64 @@ check('a trend with a return leg says which marker is which way',
 _plt.close(_fig)
 
 
+# ---------- GIF palette ----------
+# The palette used to come from the first frame alone. An animation that builds
+# up introduces colours later -- the step chart's first frame has no bars -- and
+# those colours were then mapped onto the nearest grey in every frame.
+try:
+	from PIL import Image as _Image
+	_blank = _Image.new('RGB', (40, 40), 'white')
+	_late = _Image.new('RGB', (40, 40), 'white')
+	_late.paste((0xD5, 0x5E, 0x00), (10, 10, 30, 30))          # appears only in the last frame
+	_pal_gif = Path(tempfile.mkdtemp()) / 'late.gif'
+	animate.write_gif([_blank, _blank, _late], _pal_gif, delay_ms=50)
+	with _Image.open(_pal_gif) as _im:
+		# Pillow merges identical consecutive frames and sums their durations, so
+		# the two blank frames may be one; the last frame is the one that matters.
+		_im.seek(_im.n_frames - 1)
+		_px = _im.convert('RGB').getpixel((20, 20))
+	check('a colour that only appears in a later frame survives into the GIF',
+	      sum(abs(a - b) for a, b in zip(_px, (0xD5, 0x5E, 0x00))) <= 12, True)
+except ImportError:
+	pass
+
+
+# ---------- the step chart ----------
+_steps = animate.CellSeries('steps')
+for _i, (_x, _a) in enumerate(((0, 10.00), (1, 9.90), (2, 9.80), (3, 9.70), (4, 9.60),
+                               (5, 9.50), (6, 9.40), (0, 10.00))):
+	_steps.add(f's{_i}', {'a': f'{_a:.4f}`_0.0010'}, x=float(_x))
+_sd = animate.step_series(_steps, window=3)['a']
+
+check('a step is the percent change since the previous fit',
+      round(_sd['steps'][0], 6), round((9.90 / 10.00 - 1) * 100, 6))
+check('one step per fit after the first', len(_sd['steps']), 7)
+check('a step error is propagated from both fits it joins',
+      round(_sd['step_errors'][0], 9),
+      round(100 * (9.90 / 10.00) * ((0.001 / 9.90) ** 2 + (0.001 / 10.00) ** 2) ** 0.5, 9))
+check('the rolling mean waits for a full window rather than averaging fewer steps',
+      [bool(np.isfinite(v)) for v in _sd['rolling'][:3]], [False, False, True])
+check('the rolling mean is the mean of the last `window` steps',
+      round(_sd['rolling'][2], 9), round(float(np.mean(_sd['steps'][0:3])), 9))
+check('the return step gets no rolling mean: it is a leg of one, not part of the compression',
+      bool(np.isfinite(_sd['rolling'][6])), False)
+check('window 0 turns the rolling mean off',
+      any(np.isfinite(v) for v in animate.step_series(_steps, window=0)['a']['rolling']), False)
+
+_lim, _off = animate.step_limit([-0.07] * 40 + [3.1], [0.01] * 41)
+check('one step forty times the size of the rest does not set the scale',
+      _lim < 1.0, True)
+check('...it is marked as off scale instead', _off, {40})
+check('an ordinary run has nothing off scale',
+      animate.step_limit([-0.07, -0.08, -0.06, 0.05], [0.01] * 4)[1], set())
+
+_step_frames = animate.render_step_frames(_steps, figsize=(4, 3), dpi=40, x_label='p', have_x=True,
+                                          window=3)
+check('the step chart has one frame per fit', len(_step_frames), 8)
+check('...and every frame is the same size, or the GIF cannot be assembled',
+      len({f.size for f in _step_frames}), 1)
+
+
 print()
 print(f'{len(fails)} failure(s)' + (': ' + ', '.join(fails) if fails else ''))
 sys.exit(1 if fails else 0)

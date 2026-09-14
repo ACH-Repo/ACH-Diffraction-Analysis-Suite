@@ -372,7 +372,7 @@ that only mean anything next to each other. `--gif` turns the directory into two
 animations and a trend plot for a talk:
 
 ```bash
-pp --gif                    # <dir>-fits.gif, <dir>-cell.gif, <dir>-trend.svg
+pp --gif                    # <dir>-fits.gif, -cell.gif, -steps.gif, -trend.svg
 pp --gif --gif-delay 400    # slower
 pp --gif --gif-absolute     # cell bars as values, not as changes
 ```
@@ -396,6 +396,33 @@ same either way.
 
 Frame resolution is the `gif_dpi` style setting (150 by default), kept apart from
 `dpi` so print output stays print quality without making a GIF nobody can email.
+
+#### The step chart
+
+`<dir>-steps.gif` lays the run out along its own time axis, one fit at a time,
+like a trade log with its running average:
+
+- **bars** are the change in each cell parameter since the previous fit, in
+  percent — vermillion where it shrank, green where it grew (a colour pair that
+  stays distinct under colour-vision deficiencies), with propagated errors;
+- **the black line** is the rolling mean of those bars (`--gif-rolling N`,
+  default 5, `0` for none): flat means a steady rate, drifting means the rate is
+  changing — softening or stiffening;
+- **the blue line** on the right axis is the parameter relative to the first
+  fit, dashed with open markers after a turning point.
+
+One panel per cell parameter, stacked. Single fits that stand out show up as one
+tall bar followed by one that undoes it, which a smooth trend curve hides.
+
+The rolling mean is only drawn once a full window of steps exists, and never
+across a turning point: averaging compression into decompression, or labelling
+the mean of two steps "rolling mean of 5", would both misdescribe it. A step many
+times larger than the rest — a reversible return often recovers the whole
+compression at once — is drawn to the edge of the axis and labelled with its
+real value, rather than flattening every other bar. Bars stand in measurement
+order rather than at their x value, so a run that comes back down still reads
+left to right in time; the tick labels carry the x values. As with the trend
+plot, per-step bars are only comparable when the steps are evenly spaced.
 
 #### The trend plot, and getting the order and the x axis right
 

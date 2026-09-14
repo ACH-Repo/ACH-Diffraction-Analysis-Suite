@@ -6,10 +6,12 @@ each other. This turns that directory into material for a talk:
 
     <name>-fits.gif    every fit as a frame, in order
     <name>-cell.gif    the cell parameters as bars, changing frame by frame
+    <name>-steps.gif   the change from fit to fit as bars along the run, with
+                       its rolling mean and the running ratio to the first fit
     <name>-trend.svg   every parameter relative to the first fit, as a curve
 
-All three come from one `pp --gif`, because they answer the same question and
-nobody wants to run three commands to get the parts of one slide. The
+All of them come from one `pp --gif`, because they answer the same question
+and nobody wants to run four commands to get the parts of one slide. The
 animations can also be written as animated SVG.
 
 The trend plot is the one that shows non-linear behaviour. Curvature is a
@@ -394,14 +396,40 @@ def figure_to_frame(fig, dpi=None):
 	return flat.convert('RGB')
 
 
+def _shared_palette(frames, samples=12):
+	"""An adaptive 256-colour palette covering colours from across `frames`.
+
+	Frames are sampled evenly -- always including the first and last -- shrunk
+	with nearest-neighbour so a solid bar keeps its exact colour rather than
+	being blended into its background, and stacked into one sheet that the
+	palette is derived from.
+	"""
+	from PIL import Image
+
+	n = len(frames)
+	picks = sorted({0, n - 1} | {round(i * (n - 1) / max(samples - 1, 1))
+	                              for i in range(samples)})
+	w, h = frames[0].size
+	tw, th = max(w // 2, 1), max(h // 2, 1)
+	sheet = Image.new('RGB', (tw, th * len(picks)), 'white')
+	for row, i in enumerate(picks):
+		sheet.paste(frames[i].convert('RGB').resize((tw, th), Image.NEAREST), (0, row * th))
+	return sheet.convert('P', palette=Image.ADAPTIVE, colors=256)
+
+
 def write_gif(frames, path, delay_ms=DEFAULT_DELAY_MS, loop=0):
 	"""Write `frames` as an animated GIF. Returns the path.
 
 	`loop=0` means forever, which is what a slide wants.
 
-	Frames are quantised to a shared adaptive palette taken from the first one.
-	Letting each frame pick its own 256 colours makes the background shimmer
-	between frames, which on a projector reads as a fault in the data.
+	Frames are quantised to ONE shared adaptive palette. Letting each frame pick
+	its own 256 colours makes the background shimmer between frames, which on a
+	projector reads as a fault in the data.
+
+	That palette is taken from a sample spread across the whole animation, not
+	from the first frame. An animation that builds up -- the step chart starts
+	with no bars at all -- only shows some of its colours later, and a palette
+	that never saw them maps every bar onto the nearest grey.
 	"""
 	from PIL import Image
 
@@ -411,9 +439,9 @@ def write_gif(frames, path, delay_ms=DEFAULT_DELAY_MS, loop=0):
 	if len(sizes) > 1:
 		raise ValueError(f'frames differ in size ({sorted(sizes)}); a GIF needs one size')
 
-	palette = frames[0].convert('P', palette=Image.ADAPTIVE, colors=256)
-	quantised = [palette] + [f.quantize(palette=palette, dither=Image.NONE)
-	                         for f in frames[1:]]
+	palette = _shared_palette(frames)
+	quantised = [f.convert('RGB').quantize(palette=palette, dither=Image.NONE)
+	             for f in frames]
 	quantised[0].save(str(path), save_all=True, append_images=quantised[1:],
 	                  duration=max(int(delay_ms), 20), loop=int(loop),
 	                  optimize=True, disposal=2)
@@ -945,3 +973,264 @@ def render_trend(series, x_label=None, figsize=(6.0, 4.0), title=None,
 	if title:
 		ax.set_title(title, fontsize=label_size)
 	return fig
+
+
+# ------------------------------------------------------------ the step chart
+
+#: Okabe-Ito vermillion and bluish green: a decrease and an increase that stay
+#: distinct under the common colour-vision deficiencies, which the obvious
+#: red/green pair does not -- and on a projected slide nobody can ask.
+STEP_DOWN_COLOR = '#D55E00'
+STEP_UP_COLOR = '#009E73'
+RUNNING_COLOR = '#0072B2'
+DEFAULT_ROLLING = 5
+
+# A step this many times the typical one is drawn to the edge of the axis and
+# labelled with its value, rather than being allowed to set the scale.
+_OFF_SCALE_FACTOR = 8.0
+
+
+def step_series(series, keys=None, window=DEFAULT_ROLLING, have_x=True):
+	"""Fit-to-fit change of every parameter, for the step chart.
+
+	Returns ``{key: dict}`` with, per parameter:
+
+	    ratios, ratio_errors   p_i / p_0, as in `ratio_series`
+	    steps, step_errors     100 * (p_i / p_(i-1) - 1), one per fit after the first
+	    rolling                trailing mean of `window` steps, NaN where undefined
+
+	A step's uncertainty is propagated from the two fits it joins, taken as
+	independent.
+
+	The rolling mean runs within one leg of the run at a time and is only
+	defined once a full window of steps exists in that leg. Averaging across a
+	turning point would blend compression into decompression, and a mean of
+	two steps labelled "rolling mean of 5" would misstate what it is.
+	`window` of 0 or 1 turns it off.
+	"""
+	if keys is None:
+		keys = series.keys()
+	if not keys or len(series) < 2:
+		return {}
+
+	ratios = ratio_series(series, keys)
+	xs = next(iter(ratios.values()))[0] if ratios else []
+	legs = monotonic_legs(xs if have_x else list(range(len(series))))
+	out = {}
+	for key in keys:
+		if key not in ratios:
+			continue
+		per_fit = [frame_values[key] for _label, frame_values in series.frames]
+		steps, errs = [], []
+		for i in range(1, len(per_fit)):
+			p, s, _d = per_fit[i]
+			q, t, _d = per_fit[i - 1]
+			if q == 0 or p == 0:
+				steps.append(float('nan'))
+				errs.append(0.0)
+				continue
+			r = p / q
+			steps.append(100.0 * (r - 1.0))
+			errs.append(100.0 * abs(r) * float(np.hypot((s or 0.0) / abs(p),
+			                                            (t or 0.0) / abs(q))))
+		rolling = [float('nan')] * len(steps)
+		if window and window > 1:
+			for idx, _rising in legs:
+				leg_steps = [i - 1 for i in idx[1:]]      # step i-1 ends at fit i
+				for m in range(window - 1, len(leg_steps)):
+					chunk = [steps[j] for j in leg_steps[m - window + 1:m + 1]]
+					rolling[leg_steps[m]] = float(np.mean(chunk))
+		_xs, rs, res = ratios[key]
+		out[key] = {'ratios': rs, 'ratio_errors': res, 'steps': steps,
+		            'step_errors': errs, 'rolling': rolling, 'legs': legs}
+	return out
+
+
+def step_limit(steps, errors):
+	"""Half-height of a step panel's axis: `(limit, off_scale_indices)`.
+
+	Set from the ordinary steps, not the largest. A reversible run's return
+	often recovers the whole compression in one step -- forty times the size of
+	any step before it -- and scaling to that would flatten every other bar into
+	a line. Those few are drawn to the edge and labelled with their real value.
+	"""
+	finite = [(abs(s), e) for s, e in zip(steps, errors) if np.isfinite(s)]
+	if not finite:
+		return 1.0, set()
+	sizes = np.array([s for s, _e in finite])
+	typical = float(np.median(sizes))
+	cap = typical * _OFF_SCALE_FACTOR if typical > 0 else float('inf')
+	ordinary = [s + e for s, e in finite if s <= cap] or [s + e for s, e in finite]
+	limit = (max(ordinary) * 1.25) or 1.0
+	off = {i for i, s in enumerate(steps) if np.isfinite(s) and abs(s) > limit}
+	return limit, off
+
+
+def _index_ticks(n, xs, have_x, target=7):
+	"""Tick positions and labels along the fit order.
+
+	The bars sit at their place in the run rather than at their x value, so a
+	run that comes back down still reads left to right in time. The labels carry
+	the x value so the pressure is never lost.
+	"""
+	if n <= target:
+		ticks = list(range(n))
+	else:
+		stride = max(1, int(round((n - 1) / (target - 1))))
+		ticks = [t for t in range(0, n - 1, stride) if n - 1 - t >= stride * 0.6] + [n - 1]
+	labels = [f'{xs[t]:g}' if have_x else f'{t + 1}' for t in ticks]
+	return ticks, labels
+
+
+def render_step_frames(series, figsize=(6.0, 4.0), dpi=150, title=None,
+                       x_label=None, have_x=False, window=DEFAULT_ROLLING,
+                       label_size=10, tick_size=9, legend_size=8, capture=None):
+	"""Frames of the step chart: the run revealed one fit at a time.
+
+	One panel per cell parameter, stacked on a shared axis of fit order. In
+	each, a bar is the change since the previous fit -- vermillion where the
+	parameter shrank, green where it grew -- with its propagated error; the
+	black line is the rolling mean of those bars; and the blue line on the right
+	axis is the running ratio to the first fit, dashed with open markers after
+	a turning point, as in the trend plot.
+
+	The picture is a trade log with its running average: single steps show which
+	fits stand out, the rolling mean shows whether the rate is steady or
+	drifting, and the running ratio shows where the whole run has got to. The
+	bars stand at their place in the run, not at their x value, so it reads left
+	to right in time even when the run comes back down.
+
+	Every axis is fixed to the full run before the first frame, as elsewhere.
+
+	The volume is left out: it follows from the edges, and a panel repeating
+	another adds height without adding information.
+	"""
+	import matplotlib.pyplot as plt
+
+	if capture is None:
+		capture = lambda fig: figure_to_frame(fig, dpi=dpi)  # noqa: E731
+
+	keys = series.keys()
+	data = step_series(series, keys, window, have_x=have_x)
+	keys = [k for k in keys if k in data]
+	n = len(series)
+	if not keys or n < 2:
+		return []
+
+	xs = next(iter(ratio_series(series, keys).values()))[0]
+	legs = data[keys[0]]['legs']
+	turns = [idx[0] for idx, _rising in legs[1:]]
+
+	limits = {}
+	for key in keys:
+		d = data[key]
+		limit, off = step_limit(d['steps'], d['step_errors'])
+		lo = min(r - e for r, e in zip(d['ratios'], d['ratio_errors']))
+		hi = max(r + e for r, e in zip(d['ratios'], d['ratio_errors']))
+		pad = max(hi - lo, 1e-6) * 0.08
+		limits[key] = (limit, off, (lo - pad, hi + pad))
+
+	ticks, tick_labels = _index_ticks(n, xs, have_x)
+	height = figsize[1] if len(keys) == 1 else figsize[1] * 0.62 * len(keys)
+
+	# The legend is built from stand-ins, identical on every frame. Collected
+	# from what is drawn, it would grow as lines appear, and a legend that
+	# changes size reflows the layout and makes the axes jump between frames.
+	# It sits above the panels, where it can never cover a bar.
+	from matplotlib.lines import Line2D
+	from matplotlib.patches import Patch
+	legend_handles = [Patch(color=STEP_DOWN_COLOR, label='decrease'),
+	                  Patch(color=STEP_UP_COLOR, label='increase')]
+	if window and window > 1:
+		legend_handles.append(Line2D([], [], color='black', lw=1.3,
+		                             label=f'rolling mean of {window} steps'))
+	legend_handles.append(Line2D([], [], color=RUNNING_COLOR, lw=1.3, marker='o',
+	                             markersize=2.8, label='relative to first fit'))
+	if turns:
+		legend_handles.append(Line2D([], [], color=RUNNING_COLOR, lw=1.3, linestyle='--',
+		                             marker='o', markersize=2.8, markerfacecolor='white',
+		                             label='after the turn'))
+
+	frames = []
+	for k in range(n):
+		fig, axes = plt.subplots(len(keys), 1, figsize=(figsize[0], height), dpi=dpi,
+		                         sharex=True, layout='constrained', squeeze=False)
+		axes = list(axes[:, 0])
+		for ax, key in zip(axes, keys):
+			d = data[key]
+			limit, off_scale, (r_lo, r_hi) = limits[key]
+			sym = _TREND_SYMBOLS.get(key, key)
+			right = ax.twinx()
+
+			for j in range(min(k, n - 1)):
+				v, e = d['steps'][j], d['step_errors'][j]
+				if not np.isfinite(v):
+					continue
+				pos = j + 1                                  # the step ends at fit j+1
+				color = STEP_DOWN_COLOR if v < 0 else STEP_UP_COLOR
+				shown = float(np.clip(v, -limit, limit))
+				ax.bar(pos, shown, width=0.75, color=color, zorder=2)
+				if j in off_scale:
+					# Beside the bar rather than centred on it, on whichever side has
+					# room: a return step is usually the last bar, and a centred label
+					# there runs into the axis on the right.
+					right_half = pos > (n - 1) / 2
+					ax.annotate(f'{v:+.3g} %\n(off scale)', (pos, shown),
+					            xytext=(-6 if right_half else 6, -2 if v > 0 else 2),
+					            textcoords='offset points',
+					            ha='right' if right_half else 'left',
+					            va='top' if v > 0 else 'bottom',
+					            fontsize=legend_size, color='black', zorder=6)
+				elif e:
+					ax.errorbar(pos, v, yerr=e, fmt='none', ecolor='0.2',
+					            elinewidth=0.6, capsize=1.5, zorder=3)
+
+			# Rolling mean, one line per leg and never joined across a turn.
+			for idx, _rising in legs:
+				seg = [i for i in idx[1:] if i <= k and np.isfinite(d['rolling'][i - 1])]
+				if seg:
+					ax.plot(seg, [d['rolling'][i - 1] for i in seg], color='black', lw=1.3,
+					        zorder=4)
+
+			# Running ratio. A later leg starts at the previous one's last point so
+			# the line joins, but that point keeps the marker of the leg it was
+			# measured on.
+			for j, (idx, rising) in enumerate(legs):
+				seg = [i for i in idx if i <= k]
+				if not seg:
+					continue
+				right.plot(seg, [d['ratios'][i] for i in seg], color=RUNNING_COLOR, lw=1.3,
+				           linestyle='-' if rising else '--', zorder=5)
+				marked = seg[1:] if j > 0 else seg
+				right.plot(marked, [d['ratios'][i] for i in marked], linestyle='none',
+				           marker='o', markersize=2.8, color=RUNNING_COLOR,
+				           markerfacecolor=RUNNING_COLOR if rising else 'white', zorder=5)
+
+			for t in turns:
+				ax.axvline(t + 0.5, color='0.55', linestyle=':', linewidth=0.9, zorder=1)
+			ax.axhline(0.0, color='0.5', linewidth=0.8, zorder=1)
+			ax.set_xlim(-0.8, n - 0.2)
+			ax.set_ylim(-limit, limit)
+			right.set_ylim(r_lo, r_hi)
+			right.ticklabel_format(axis='y', useOffset=False)
+			ax.set_ylabel(f'$\\Delta {sym}$ since previous fit / %', fontsize=label_size)
+			right.set_ylabel(f'${sym}/{sym}_0$', fontsize=label_size, color=RUNNING_COLOR)
+			ax.tick_params(labelsize=tick_size, direction='in')
+			right.tick_params(axis='y', labelsize=tick_size, labelcolor=RUNNING_COLOR,
+			                  direction='in')
+
+		axes[-1].set_xticks(ticks)
+		axes[-1].set_xticklabels(tick_labels)
+		axes[-1].set_xlabel(f'{x_label if have_x else "fit number"}   '
+		                    f'(bars in measurement order)', fontsize=label_size)
+		heading = (f'fit {k + 1} of {n}, x = {xs[k]:g}' if have_x else f'fit {k + 1} of {n}')
+		# On the top panel rather than the figure: a figure title and an outside
+		# legend both claim the top edge and draw over each other, while an axes
+		# title is part of the panel and the legend is laid out above it.
+		axes[0].set_title(heading if title is None else f'{title}: {heading}',
+		                  fontsize=label_size)
+		fig.legend(handles=legend_handles, loc='outside upper center',
+		           ncol=min(len(legend_handles), 3), fontsize=legend_size, frameon=False)
+		frames.append(capture(fig))
+		plt.close(fig)
+	return frames
