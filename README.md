@@ -158,16 +158,16 @@ cif_loc = 'D:\Workfolder\Shared\CIF_LOC'
 
 [profiles.CN]
 cif_loc   = 'D:\Workfolder\<you>\CIF_LOC'
-topas_exe = 'C:\TOPAS7	c.exe'
+topas_exe = 'C:\TOPAS7\tc.exe'
 qall      = true        # pp shows R_wp, R_exp and chi by default
 
 [profiles.AB]
 cif_loc = 'D:\Workfolder\<colleague>\CIF_LOC'
 ```
 
-Profiles store settings, not command-line flags, so an explicit flag always wins
-for a single run. A profile with `qall = true` can still be read normally — the
-setting decides the default, the flag decides the invocation.
+An explicit flag always wins for a single run: the setting decides the default,
+the flag decides the invocation. A profile can also hold default *flags* per tool
+— see [Flags every run starts with](#flags-every-run-starts-with).
 
 Set `ACH_CONFIG_DIR` to relocate the whole config (useful for a portable install
 or for testing against a throwaway config).
@@ -344,12 +344,12 @@ you happened to be standing. TOPAS's exit code is reported and passed through.
 The engine location is a setting, not a hardcoded path:
 
 ```bash
-achdiff profile set -u CN topas_exe="C:\TOPAS7	c.exe"
+achdiff profile set -u CN topas_exe="C:\TOPAS7\tc.exe"
 set TOPAS_EXE=C:\TOPAS6	c.exe        # this shell only
-rp myfit.inp --topas "C:\TOPAS7	c.exe"
+rp myfit.inp --topas "C:\TOPAS7\tc.exe"
 ```
 
-It defaults to `C:\TOPAS7	c.exe`, which is what the original script assumed.
+It defaults to `C:\TOPAS7\tc.exe`, which is what the original script assumed.
 
 Background options, in menu order: a zeroed polynomial (6 coefficients, the safe
 starting point for any holder), the pre-refined `silicon` and `plastic` holder
@@ -416,8 +416,46 @@ pq -i a.xy b.xy -b 12.2 -d          # interactive, so run2.bat
   wherever it is started from, and pauses if the command fails so the reason
   stays on screen.
 
-A `.bat` records the command, not your style sheet or profile: after you change
-those, re-running an old one draws it in the new look.
+What goes in the file is what *ran*, not only what you typed: your
+[default flags](#flags-every-run-starts-with) written out in full, then
+`--no-defaults` so they are not added a second time, then `-u ID` when the
+profile came from `set ACH_USER` or a filename rather than the command line. A
+double-clicked file opens a fresh window without your `ACH_USER`, and without the
+pin it would draw with nobody's settings. So an old `run3.bat` redraws the same
+plot after you change your defaults or your session.
+
+```
+pp -c --qall -s -m 45,,5 --no-defaults -u CN
+```
+
+What it still reads at run time is the *content* of that profile — its style
+sheet and CIF library. Change your style sheet and an old run file redraws in the
+new look.
+
+#### Flags every run starts with
+
+Put flags you always want in your profile, per tool:
+
+```bash
+achdiff flags set -u CN pp -d -c --qall   # every pp run documents itself, with cell boxes
+achdiff flags set -u CN pq -d
+achdiff flags set --global pq -d          # for everyone without their own
+achdiff flags show -u CN
+achdiff flags clear -u CN pp
+```
+
+- They go in front of what you type, so a flag you type wins: `pp -x png` over
+  a default `-x svg`, a typed `-m` instead of a default one. The tool prints
+  which defaults it used and which you replaced.
+- `--no-defaults` runs without them, for the one run where a default is wrong.
+  There is no way to switch off a single default flag — `-c` has no `--no-c` —
+  so it is all of them or none.
+- They are checked with the tool's own parser when you set them, so a typo is
+  refused then, not on every run afterwards. `-u` can't be a default (it picks
+  the profile the defaults come from), and must come before the tool name.
+- A profile's own list replaces `--global`'s rather than adding to it;
+  `achdiff flags set -u CN pq` with nothing after it opts CN out entirely.
+- `qall = true` from before still works, and counts as a default `--qall`.
 
 ### `pp` — Pawley plotter
 
@@ -690,6 +728,7 @@ src/achdiff/
 ├── config.py            # layered settings, profile storage
 ├── identity.py          # who is running this
 ├── styles.py            # per-person, per-plotter style sheets
+├── cmdline.py           # every tool's parsing: default flags, then -d
 ├── document.py          # -d: the command, kept as run<N>.bat
 ├── core/
 │   ├── rounding.py      # crystallographic rounding (one copy)

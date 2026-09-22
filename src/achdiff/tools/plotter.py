@@ -10,7 +10,7 @@ import matplotlib.colors as mcolors
 from matplotlib.lines import Line2D
 from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 
-from .. import config, document, identity, styles
+from .. import cmdline, config, identity, styles
 from ..core import animate, overlays
 from ..progname import prog_name
 from ..core.rounding import cryst_round, split_value_bracket
@@ -239,7 +239,7 @@ def _build_parser():
 	                         'column width, say -- without editing your own. See '
 	                         '`achdiff style --help`.')
 	identity.add_user_argument(parser)
-	document.add_document_argument(parser)
+	cmdline.add_arguments(parser)
 	return parser
 
 
@@ -1555,15 +1555,12 @@ def vprint(*a, **kw):
 
 def main():
 	global args
-	# parse_args, not parse_known_args: a mistyped flag used to be dropped without
-	# a word, so `--multply 20,40,10` drew an unscaled plot -- and with -d, wrote
-	# that into a file that claimed otherwise.
-	parser = _build_parser()
-	args = parser.parse_args()
-	if args.document:
-		# --gif saves too, so it counts as a silent run.
-		document.write_run_file(parser, 'pp', 'achdiff.tools.plotter',
-		                        silent=bool(args.silent or args.gif))
+	# Strict parsing, not parse_known_args: a mistyped flag used to be dropped
+	# without a word, so `--multply 20,40,10` drew an unscaled plot -- and with
+	# -d, wrote that into a file that claimed otherwise. --gif saves too, so it
+	# counts as a silent run.
+	args = cmdline.parse_args(_build_parser(), 'pp', 'achdiff.tools.plotter',
+	                          silent=lambda a: a.silent or a.gif)
 
 	# Resolve the person, then their settings. Announced rather than silent: a
 	# wrong profile means a wrong CIF library, and that should never be invisible.
@@ -1597,9 +1594,9 @@ def main():
 	bands = overlays.parse_bands(args.band)
 
 	settings['cif_dir_path'] = config.get('cif_loc', cli_value=args.cif_loc, user=user)
-	# store_true can't distinguish "absent" from "off", so only an explicit --qall
-	# overrides the profile; without it the saved preference decides.
-	qall = True if args.qall else bool(config.get('qall', user=user))
+	# A profile's `qall = true` arrives as a default --qall (cmdline.SETTING_FLAGS),
+	# so --no-defaults turns it off and -d writes it down like any other flag.
+	qall = args.qall
 
 	if args.save_profile:
 		if not args.user:

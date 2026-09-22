@@ -9,7 +9,7 @@ import copy
 import argparse
 from ..core.rounding import cryst_round
 from ..core import resource
-from .. import document
+from .. import cmdline
 from ..progname import prog_name
 
 
@@ -31,7 +31,7 @@ def _build_parser():
 	                    help='Use a different resource.htm (table template and space-group '
 	                         'lookup). Also settable via ACH_RESOURCE_HTM. Defaults to the '
 	                         'copy shipped with the package.')
-	document.add_document_argument(parser)
+	cmdline.add_arguments(parser)
 	return parser
 
 
@@ -611,10 +611,7 @@ def main():
 
 	# parse_args, not parse_known_args: a mistyped flag must stop the run, not
 	# be dropped -- least of all when -d is about to write it down.
-	parser = _build_parser()
-	args = parser.parse_args()
-	if args.document:
-		document.write_run_file(parser, 'pt', 'achdiff.tools.tables')
+	args = cmdline.parse_args(_build_parser(), 'pt', 'achdiff.tools.tables')
 
 	input_files = select_files_wizard('.')
 	if not input_files:

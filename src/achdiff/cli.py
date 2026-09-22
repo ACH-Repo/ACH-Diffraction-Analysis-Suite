@@ -22,7 +22,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
-from . import config, identity, styles
+from . import cmdline, config, identity, styles
 
 # Tool name -> module implementing it. The keys are what a user names when
 # creating an alias; the built-in entry-point names are deliberately not used
@@ -726,6 +726,75 @@ def cmd_style_edit(args):
 		return 1
 
 
+def _flags_scope(args):
+	"""Whose default flags a `flags` subcommand acts on: (user, label).
+
+	user is None for --global. Returns (False, None) when nobody was named, since
+	writing to [defaults] by accident would change everyone's runs."""
+	if getattr(args, 'is_global', False):
+		return None, '[defaults], for everyone without their own'
+	user, source = identity.resolve(args.user)
+	if not user:
+		print('[!] No profile selected. Pass -u ID for one person, or --global for '
+		      'everyone on this machine.')
+		return False, None
+	if source != 'command line':
+		print(identity.describe(user, source))
+	return user, f'profile {user}'
+
+
+def cmd_flags_show(args):
+	user, source = identity.resolve(args.user)
+	print(identity.describe(user, source))
+	print()
+	for tool in cmdline.TOOL_MODULES:
+		flags, where = cmdline.default_flags(tool, user)
+		if flags:
+			print(f'  {tool}  {" ".join(flags):<40} ({where})')
+		else:
+			print(f'  {tool}  (none)')
+	print()
+	print('Set with e.g.  achdiff flags set -u CN pp -d -c')
+	print('Skip for one run with --no-defaults.')
+	return 0
+
+
+def cmd_flags_set(args):
+	# The flags first: `flags set pp -u CN -d` puts -u among them, and saying
+	# where it belongs beats "no profile selected".
+	problem = cmdline.check_defaults(args.tool, args.flags)
+	if problem:
+		print(f'[!] Not saved. {args.tool} {" ".join(args.flags)}: {problem}')
+		return 1
+	user, label = _flags_scope(args)
+	if user is False:
+		return 1
+	config.save_default_flags(args.tool, args.flags, user=user)
+	if args.flags:
+		print(f'[+] Default {args.tool} flags for {label}: {" ".join(args.flags)}')
+		print(f'    Every {args.tool} run now starts with these. Flags you type come after')
+		print(f'    them and win; `{args.tool} --no-defaults` skips them for one run.')
+	elif user:
+		print(f'[+] {label} now has no default {args.tool} flags, even where [defaults] '
+		      f'sets some.')
+	else:
+		print(f'[+] [defaults] now sets no {args.tool} flags.')
+	return 0
+
+
+def cmd_flags_clear(args):
+	user, label = _flags_scope(args)
+	if user is False:
+		return 1
+	config.save_default_flags(args.tool, None, user=user)
+	print(f'[+] Removed the default {args.tool} flags of {label}.')
+	if user:
+		flags, where = cmdline.default_flags(args.tool, user)
+		if flags:
+			print(f'    {args.tool} now starts with {" ".join(flags)} from {where}.')
+	return 0
+
+
 def _on_path(directory):
 	entries = os.environ.get('PATH', '').split(os.pathsep)
 	directory = str(directory).rstrip('\\/').lower()
@@ -869,6 +938,43 @@ def _build_parser():
 	s_edit = _with_style_user(st_sub.add_parser(
 		'edit', help='Open a style sheet, creating it first if needed.'))
 	s_edit.set_defaults(func=cmd_style_edit)
+
+	fl = sub.add_parser('flags', help='Flags a tool starts every run with.',
+	                    description='Default flags per tool, stored in your profile -- '
+	                                'e.g. -d on every pp run. Flags you type come after '
+	                                'them and win; --no-defaults skips them for one run. '
+	                                'A -d record writes them out in full, so an old run '
+	                                'file never changes when your defaults do.')
+	fl_sub = fl.add_subparsers(dest='action', required=True)
+
+	def _with_flags_scope(p):
+		p.add_argument('-u', '--user', default=None, metavar='ID',
+		               help='Whose defaults. Must come before TOOL.')
+		p.add_argument('--global', dest='is_global', action='store_true',
+		               help='The [defaults] everyone without their own falls back to.')
+		p.add_argument('tool', choices=list(cmdline.TOOL_MODULES), metavar='TOOL',
+		               help='pp, pq, pf, pt or rp.')
+		return p
+
+	f_show = fl_sub.add_parser('show', help="Show each tool's default flags.")
+	f_show.add_argument('-u', '--user', default=None, metavar='ID',
+	                    help='Whose defaults to show.')
+	f_show.set_defaults(func=cmd_flags_show)
+
+	f_set = _with_flags_scope(fl_sub.add_parser(
+		'set', help='Set the flags a tool starts with.',
+		usage='achdiff flags set [-u ID | --global] TOOL [FLAG ...]'))
+	# REMAINDER, so `-d` after the tool name is taken as one of the flags rather
+	# than as an option of this command.
+	f_set.add_argument('flags', nargs=argparse.REMAINDER, metavar='FLAG',
+	                   help='The flags, exactly as you would type them after the tool. '
+	                        'None at all stores an empty set, which opts a profile out '
+	                        'of [defaults].')
+	f_set.set_defaults(func=cmd_flags_set)
+
+	f_clear = _with_flags_scope(fl_sub.add_parser(
+		'clear', help="Remove a tool's default flags."))
+	f_clear.set_defaults(func=cmd_flags_clear)
 
 	conf = sub.add_parser('config', help='Locate the configuration file.')
 	conf_sub = conf.add_subparsers(dest='action', required=True)

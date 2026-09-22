@@ -13,10 +13,12 @@ Every person on a shared TOPAS login writes to the same file; they are separated
 by profile, not by Windows account. That is deliberate: one file holds the whole
 roster, so `achdiff profile list` can show who is registered.
 
-Profiles store *settings*, not command-line strings. A profile that set
-``--qall`` as a flag could never be overridden back off for a single run without
-inventing a ``--no-qall`` counter-flag for every such option; storing ``qall =
-true`` as a value the tool reads as its default avoids that entire surface.
+Profiles store *settings*. They can also store default *flags* per tool --
+``[profiles.<ID>.flags]`` with ``pp = ['-d', '-c']`` -- which was once declined
+here: a flag set by default can never be switched back off for a single run
+without a ``--no-X`` counter-flag for every option. Default flags exist anyway,
+because people wanted ``-d`` on every run, and the objection is answered with a
+single ``--no-defaults`` that drops all of them for one run. See cmdline.py.
 """
 
 import os
@@ -167,6 +169,40 @@ def _fmt_toml_value(value):
 	if "'" not in text:
 		return "'" + text + "'"
 	return '"' + text.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def default_flags(tool, user=None, cfg=None):
+	"""`tool`'s default flags as (list, source), or ([], None).
+
+	A profile's list replaces [defaults]' rather than adding to it, so a person
+	can opt out of a machine-wide default -- `achdiff flags set -u CN pp` with
+	nothing after it stores an empty list that does exactly that."""
+	cfg = load() if cfg is None else cfg
+	if user:
+		table = profiles(cfg).get(user, {}).get('flags', {})
+		if isinstance(table, dict) and isinstance(table.get(tool), list):
+			return [str(f) for f in table[tool]], f'profile {user}'
+	table = cfg.get('defaults', {}).get('flags', {})
+	if isinstance(table, dict) and isinstance(table.get(tool), list):
+		return [str(f) for f in table[tool]], '[defaults]'
+	return [], None
+
+
+def save_default_flags(tool, flags, user=None):
+	"""Store `flags` as `tool`'s defaults for `user`, or in [defaults] for
+	everyone when `user` is None. `flags=None` removes the entry instead, which
+	for a profile means falling back to [defaults] again. Returns the path."""
+	cfg = load()
+	scope = (cfg.setdefault('profiles', {}).setdefault(user, {}) if user
+	         else cfg.setdefault('defaults', {}))
+	table = scope.setdefault('flags', {})
+	if flags is None:
+		table.pop(tool, None)
+	else:
+		table[tool] = list(flags)
+	if not table:
+		scope.pop('flags')
+	return write(cfg)
 
 
 def trusted_params(user, cfg=None):

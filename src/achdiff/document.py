@@ -56,7 +56,7 @@ def add_document_argument(parser):
 
 # ------------------------------------------------------------------ argv
 
-def _looks_like_value(parser, token):
+def looks_like_value(parser, token):
 	"""Whether argparse would read `token` as a value rather than as options.
 
 	Mirrors argparse's own test: no prefix character, a negative number, or a
@@ -87,7 +87,7 @@ def without_document_flag(parser, argv):
 		if tok == '--':
 			out.extend(argv[i:])      # everything after is positional, as given
 			break
-		if _looks_like_value(parser, tok):
+		if looks_like_value(parser, tok):
 			out.append(tok)
 			continue
 		if tok.startswith('--'):

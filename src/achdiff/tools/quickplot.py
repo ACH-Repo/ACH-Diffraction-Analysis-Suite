@@ -19,7 +19,7 @@ from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 from matplotlib.colors import is_color_like
 from matplotlib.transforms import blended_transform_factory
 
-from .. import config, document, identity, styles
+from .. import cmdline, config, identity, styles
 from ..core import cif as cifcore
 from ..core import bruker, overlays
 from ..progname import prog_name
@@ -150,7 +150,7 @@ def _build_parser():
 	                         'selects. pq reads its own sheets, never pp\'s. See '
 	                         '`achdiff style --help`.')
 	identity.add_user_argument(parser)
-	document.add_document_argument(parser)
+	cmdline.add_arguments(parser)
 	return parser
 
 
@@ -580,10 +580,8 @@ def derive_label(path):
 
 def main():
 	global args, CIF_LOC
-	parser = _build_parser()
-	args = parser.parse_args()
-	if args.document:
-		document.write_run_file(parser, 'pq', 'achdiff.tools.quickplot', silent=args.silent)
+	args = cmdline.parse_args(_build_parser(), 'pq', 'achdiff.tools.quickplot',
+	                          silent=lambda a: a.silent)
 
 	# Resolve the person, then their CIF library. Announced rather than silent so a
 	# wrong profile can't quietly point -r at someone else's structures.

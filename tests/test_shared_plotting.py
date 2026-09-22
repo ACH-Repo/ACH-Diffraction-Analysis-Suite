@@ -252,6 +252,69 @@ check('the -b and -m style settings exist in both plotters',
        for k in ('band_color', 'band_width', 'multiply_label_size', 'x_tick_step')],
       [True] * 4)
 
+# ---------- default flags ----------
+from achdiff import cmdline, config  # noqa: E402
+
+config.save_default_flags('pp', ['-c', '-m', '20,40,10'], user='FL')
+config.save_default_flags('pq', ['-d'])                       # [defaults], for everyone
+config.save_default_flags('pq', [], user='NOPE')              # opts NOPE out of it
+check("a profile's flags come from the profile",
+      config.default_flags('pp', 'FL'), (['-c', '-m', '20,40,10'], 'profile FL'))
+check('[defaults] covers a profile with none of its own',
+      config.default_flags('pq', 'FL'), (['-d'], '[defaults]'))
+check('an empty list opts a profile out of [defaults]',
+      config.default_flags('pq', 'NOPE'), ([], 'profile NOPE'))
+config.save_default_flags('pq', None, user='NOPE')
+check('clearing it falls back to [defaults] again',
+      config.default_flags('pq', 'NOPE'), (['-d'], '[defaults]'))
+config.save_default_flags('pq', None)
+
+config.save_profile('FL', {'qall': True})
+check("a profile's qall = true counts as a default --qall",
+      cmdline.default_flags('pp', 'FL')[0], ['-c', '-m', '20,40,10', '--qall'])
+
+check('defaults are checked by the tool\'s own parser',
+      cmdline.check_defaults('pp', ['--multply', '2']), 'unrecognized arguments: --multply 2')
+check('-u cannot be a default', cmdline.check_defaults('pp', ['-u', 'CN']).startswith('-u'), True)
+check('nor --save-profile', 'save-profile' in cmdline.check_defaults('pq', ['--save-profile']), True)
+check('nor a bare value such as an .inp file',
+      cmdline.check_defaults('rp', ['fit.inp']) is not None, True)
+check('good flags pass', cmdline.check_defaults('pp', ['-d', '-c', '-m', '20,40,10']), None)
+
+check('a typed flag replaces the same default, and the record says so once',
+      cmdline.merge(_pp, ['-c', '-m', '20,40,10', '-x', 'svg'], ['-s', '-m', '45,,5', '-xpng']),
+      (['-c', '-s', '-m', '45,,5', '-xpng'], ['-m', '20,40,10', '-x', 'svg']))
+
+_rec = Path(tempfile.mkdtemp())
+os.chdir(_rec)
+os.environ['ACH_USER'] = 'FL'
+config.save_default_flags('pp', ['-d', '-c', '-m', '20,40,10'], user='FL')
+try:
+	_args = cmdline.parse_args(plotter._build_parser(), 'pp', 'achdiff.tools.plotter',
+	                           argv=['-s'], silent=lambda a: a.silent)
+finally:
+	os.environ.pop('ACH_USER')
+	os.chdir(_cwd)
+check('default flags reach the run', (_args.cell_info, _args.multiply, _args.qall, _args.document),
+      (True, ['20,40,10'], True, True))
+_files = sorted(p.name for p in _rec.iterdir())
+check('a default -d writes a record like a typed one',
+      _files, ['run1_s.bat' if os.name == 'nt' else 'run1_s.sh'])
+_line = [ln for ln in (_rec / _files[0]).read_text(encoding='utf-8').splitlines()
+         if ln.startswith('pp ') or ' -m ' in ln][0]
+check('the record spells out the defaults, skips them on replay, and pins the profile',
+      _line.split(' ', 1)[1], '-c -m 20,40,10 --qall -s --no-defaults -u FL')
+
+# The record must replay to the same run however the defaults change later.
+config.save_default_flags('pp', ['-d', '-b', '12'], user='FL')
+_replay = cmdline.parse_args(plotter._build_parser(), 'pp', 'achdiff.tools.plotter',
+                             argv=_line.split(' ')[1:])
+check('...and replays to the same flags after the defaults change',
+      (_replay.cell_info, _replay.multiply, _replay.qall, _replay.band, _replay.document,
+       _replay.user),
+      (True, ['20,40,10'], True, None, False, 'FL'))
+
+
 # ---------- the one-time move out of the flat layout ----------
 _old = Path(tempfile.mkdtemp())
 os.environ['ACH_CONFIG_DIR'] = str(_old)

@@ -45,7 +45,7 @@ try:
 except ImportError:
 	find_peaks = None
 
-from .. import config, document, identity
+from .. import cmdline, config, identity
 from ..core import bruker
 from ..core import cif as cifcore
 from ..progname import prog_name
@@ -966,15 +966,7 @@ def report_cif_failure(arg, tried):
 # MAIN
 # ==========================================
 
-def main():
-	# Windows consoles default to cp1252; reconfigure to UTF-8 so the unicode
-	# in --help text and the TOPAS printout doesn't crash.
-	for stream in (sys.stdout, sys.stderr):
-		try:
-			stream.reconfigure(encoding='utf-8')  # Python 3.7+
-		except Exception:
-			pass
-
+def _build_parser():
 	ap = argparse.ArgumentParser(prog=prog_name('pf'), description=__doc__,
 	                              formatter_class=argparse.RawDescriptionHelpFormatter)
 	ap.add_argument('-e', '--exp', help='Path to the experimental data file.')
@@ -988,10 +980,20 @@ def main():
 	ap.add_argument('-v', '--verbose', action='store_true',
 	                 help='Print resolution diagnostics for inputs.')
 	identity.add_user_argument(ap)
-	document.add_document_argument(ap)
-	args = ap.parse_args()
-	if args.document:
-		document.write_run_file(ap, 'pf', 'achdiff.tools.prefit')
+	cmdline.add_arguments(ap)
+	return ap
+
+
+def main():
+	# Windows consoles default to cp1252; reconfigure to UTF-8 so the unicode
+	# in --help text and the TOPAS printout doesn't crash.
+	for stream in (sys.stdout, sys.stderr):
+		try:
+			stream.reconfigure(encoding='utf-8')  # Python 3.7+
+		except Exception:
+			pass
+
+	args = cmdline.parse_args(_build_parser(), 'pf', 'achdiff.tools.prefit')
 
 	global VERBOSE, CIF_LOC
 	VERBOSE = bool(args.verbose)
