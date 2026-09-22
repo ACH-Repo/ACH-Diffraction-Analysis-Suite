@@ -579,50 +579,57 @@ def _style_user(args):
 
 def cmd_style_path(args):
 	user = _style_user(args)
-	path = styles.style_path(user)
+	path = styles.style_path(args.tool, user)
 	print(path)
 	if not path.exists():
 		who = f'profile {user}' if user else 'everyone (default.toml)'
-		print(f'(no style for {who} yet; `achdiff style init` writes one)')
+		print(f'(no {args.tool} style for {who} yet; '
+		      f'`achdiff style init {args.tool}` writes one)')
 	return 0
 
 
 def cmd_style_list(args):
-	found = styles.available()
-	print(f'Styles: {styles.styles_dir()}')
-	print()
-	if not found:
-		print('No style sheets yet. Write a fully commented one with:')
-		print('  achdiff style init -u CN        for one person')
-		print('  achdiff style init              for everyone on this machine')
-		return 0
+	tools = [args.tool] if args.tool else list(styles.TOOLS)
+	found = styles.available(args.tool)
+	print(f'Styles: {styles.styles_root()}')
 	roster = set(config.profile_ids())
-	for stem, path in found:
-		if stem == styles.DEFAULT_STYLE_STEM:
-			note = 'applies to everyone, underneath any personal style'
-		elif stem in roster:
-			note = f'applies when -u resolves to {stem}'
-		else:
-			# Not an error -- a style may be written before its profile exists --
-			# but it is the likeliest reason a style "does nothing", so say it.
-			note = f'no profile {stem} is registered, so -u {stem} never resolves to it'
-		print(f'  {path.name:<16} {note}')
+	for tool in tools:
+		print()
+		print(f'{tool}  ({styles.styles_dir(tool)})')
+		mine = [(stem, path) for t, stem, path in found if t == tool]
+		if not mine:
+			print('  none yet. Write a fully commented one with:')
+			print(f'    achdiff style init {tool} -u CN     for one person')
+			print(f'    achdiff style init {tool}           for everyone on this machine')
+			continue
+		for stem, path in mine:
+			if stem == styles.DEFAULT_STYLE_STEM:
+				note = 'applies to everyone, underneath any personal style'
+			elif stem in roster:
+				note = f'applies when -u resolves to {stem}'
+			else:
+				# Not an error -- a style may be written before its profile exists,
+				# or be a one-off used with --style -- but it is the likeliest
+				# reason a style "does nothing", so say it.
+				note = (f'no profile {stem} is registered, so only --style {stem} '
+				        f'reaches it')
+			print(f'  {path.name:<16} {note}')
 	return 0
 
 
 def cmd_style_init(args):
 	user = _style_user(args)
-	path, created = styles.write_template(user, force=args.force)
+	path, created = styles.write_template(args.tool, user, force=args.force)
 	if not created:
 		print(f'[!] {path} already exists.')
 		print('    Re-run with --force to replace it with a fresh template.')
 		return 1
 	who = f'profile {user}' if user else 'everyone without a style of their own'
-	print(f'[+] Wrote a style sheet for {who}:')
+	print(f'[+] Wrote a {args.tool} style sheet for {who}:')
 	print(f'      {path}')
 	print('    Every setting is listed at its current value and commented out, so')
 	print('    nothing changes until you uncomment a line. Open it with:')
-	print('      achdiff style edit' + (f' -u {user}' if user else ''))
+	print(f'      achdiff style edit {args.tool}' + (f' -u {user}' if user else ''))
 
 	# A style is filed under a profile ID, but writing one does not create the
 	# profile -- and without the profile, filename inference has no roster to
@@ -646,7 +653,7 @@ def cmd_style_install(args):
 		return 1
 
 	user = _style_user(args)
-	target = styles.style_path(user)
+	target = styles.style_path(args.tool, user)
 
 	if target.exists() and source.resolve() == target.resolve():
 		print(f'[+] {target} is already this file.')
@@ -655,12 +662,11 @@ def cmd_style_install(args):
 	# Check before copying, not after: a file that would have been ignored at
 	# plot time is much easier to think about while it is still the thing you
 	# just typed the name of.
-	good, unknown, invalid = styles.validate(source)
+	good, unknown, invalid = styles.validate(args.tool, source)
 	for name, reason in invalid:
 		print(f'[!] {source.name}: {name} -- {reason}.')
 	if unknown:
-		print(f'[!] {source.name}: unknown setting(s) {", ".join(sorted(unknown))}.')
-		print('    `achdiff style init` writes a file listing every setting there is.')
+		styles.report_unknown(args.tool, source.name, unknown)
 	if not good and (unknown or invalid):
 		print('[!] Nothing in this file would be applied. Not installing it.')
 		return 1
@@ -675,7 +681,7 @@ def cmd_style_install(args):
 	shutil.copyfile(str(source), str(target))
 
 	who = f'profile {user}' if user else 'everyone without a style of their own'
-	print(f'[+] Installed {source.name} as the style for {who}:')
+	print(f'[+] Installed {source.name} as the {args.tool} style for {who}:')
 	print(f'      {target}')
 	print(f'    {len(good)} setting(s) will be applied.')
 
@@ -690,7 +696,7 @@ def cmd_style_install(args):
 
 def cmd_style_edit(args):
 	user = _style_user(args)
-	path, created = styles.write_template(user, force=False)
+	path, created = styles.write_template(args.tool, user, force=False)
 	if created:
 		print(f'[+] Created {path}')
 
@@ -819,20 +825,27 @@ def _build_parser():
 	                     help='Drop from [defaults] rather than from a person.')
 	p_unset.set_defaults(func=cmd_profile_unset)
 
-	st = sub.add_parser('style', help='Your own plot style for pp.',
+	st = sub.add_parser('style', help='Your own plot style for pp and pq.',
 	                    description='Style sheets are TOML files kept beside config.toml, '
-	                                'one per person, and are never touched by an upgrade. '
-	                                'Precedence: --style FILE > ACH_STYLE > '
-	                                'styles/<ID>.toml > styles/default.toml > built-in.')
+	                                'one per person and per plotter, and are never touched '
+	                                'by an upgrade. A pp sheet never affects pq, nor the '
+	                                'other way round. Precedence, for pp: --style FILE > '
+	                                'ACH_STYLE_PP > styles/pp/<ID>.toml > '
+	                                'styles/pp/default.toml > built-in; likewise for pq.')
 	st_sub = st.add_subparsers(dest='action', required=True)
 
 	def _with_style_user(p):
+		# TOOL comes first, so `style install pq FILE` reads in the order typed.
+		p.add_argument('tool', choices=sorted(styles.TOOLS),
+		               help='The plotter whose style sheet this is: pp or pq.')
 		p.add_argument('-u', '--user', default=None, metavar='ID',
 		               help='Whose style to act on. Without it, the shared '
 		                    'default.toml that applies to everyone.')
 		return p
 
 	s_ls = st_sub.add_parser('list', help='Show the style sheets on this machine.')
+	s_ls.add_argument('tool', nargs='?', choices=sorted(styles.TOOLS),
+	                  help="Only this plotter's sheets: pp or pq. Default: both.")
 	s_ls.set_defaults(func=cmd_style_list)
 
 	s_path = _with_style_user(st_sub.add_parser('path', help='Print a style file path.'))

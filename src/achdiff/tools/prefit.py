@@ -45,7 +45,7 @@ try:
 except ImportError:
 	find_peaks = None
 
-from .. import config, identity
+from .. import config, document, identity
 from ..core import bruker
 from ..core import cif as cifcore
 from ..progname import prog_name
@@ -988,7 +988,10 @@ def main():
 	ap.add_argument('-v', '--verbose', action='store_true',
 	                 help='Print resolution diagnostics for inputs.')
 	identity.add_user_argument(ap)
+	document.add_document_argument(ap)
 	args = ap.parse_args()
+	if args.document:
+		document.write_run_file(ap, 'pf', 'achdiff.tools.prefit')
 
 	global VERBOSE, CIF_LOC
 	VERBOSE = bool(args.verbose)

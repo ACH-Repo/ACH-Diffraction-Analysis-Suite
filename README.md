@@ -176,13 +176,18 @@ or for testing against a throwaway config).
 
 Every group has house rules for a figure — what the y axis is called, whether
 the legend says "Reflections" or "Bragg reflections", whether the R-factor sits
-in the plot or in the caption. `pp` reads those from a style sheet of your own,
-picked by the same `-u` that picks your CIF library.
+in the plot or in the caption. `pp` and `pq` read those from a style sheet of
+your own, picked by the same `-u` that picks your CIF library.
+
+Each plotter has its own sheets. A Pawley fit and a stack of patterns are
+different figures, and a column-width `pp` sheet has no business shrinking every
+`pq` stack too — so every `achdiff style` command names the plotter it is for:
 
 ```bash
-achdiff style init -u CN     # write a commented file listing every setting
-achdiff style edit -u CN     # open it
-pp -s                        # every plot from now on is in your style
+achdiff style init pp -u CN     # write a commented file listing every setting
+achdiff style edit pp -u CN     # open it
+pp -s                           # every pp plot from now on is in your style
+achdiff style init pq -u CN     # the same, separately, for pq
 ```
 
 Sent one by a colleague instead of writing your own? Install it in one step —
@@ -190,11 +195,11 @@ it is checked before it is copied, so a typo in it is caught now rather than the
 next time you plot:
 
 ```bash
-achdiff style install CN.toml -u CN
+achdiff style install pp CN.toml -u CN
 achdiff style list                    # confirm it landed
 ```
 
-`init` writes `%APPDATA%\ach-diffraction\styles\CN.toml` with every setting at
+`init` writes `%APPDATA%\ach-diffraction\styles\pp\CN.toml` with every setting at
 the value currently in effect, each one commented out and explained. Uncomment
 what you want to own; anything left commented keeps following the built-in, so
 a later release can improve a default you never asked about.
@@ -219,24 +224,35 @@ Style sheets live outside the package, so `pip install --upgrade` never touches
 them, and nothing personal has to be committed anywhere to make a person's plots
 come out right on their own machine.
 
+Settings that mean the same thing are spelled the same in both plotters —
+`figsize`, `axis_label_size`, `x_tick_step`, `band_color` — but each sheet only
+sets its own plotter's value. A `pq` setting written into a `pp` sheet is
+reported as belonging to `pq`, not applied.
+
+**Changed in 0.14.0:** sheets used to sit directly in `styles\`, and were all
+for `pp`. The first run after upgrading moves them into `styles\pp\` and says so.
+
 ### Layering
 
 ```
---style FILE  >  ACH_STYLE  >  styles/<ID>.toml  >  styles/default.toml  >  built-in
+--style FILE  >  ACH_STYLE_PP  >  styles/pp/<ID>.toml  >  styles/pp/default.toml  >  built-in
 ```
 
-`styles/default.toml` sets a whole machine's look for everyone without one of
-their own. `--style` layers a one-off on top without editing yours:
+and the same for `pq` with `ACH_STYLE_PQ` and `styles/pq/`. The older
+`ACH_STYLE` still works, and still means `pp`.
+
+`styles/pp/default.toml` sets a whole machine's `pp` look for everyone without
+one of their own. `--style` layers a one-off on top without editing yours:
 
 ```bash
 pp -s --style narrow-column          # same look, journal column width
 pp --gif --gif-delay 250             # animate a whole sequential run
 ```
 
-A bare name is looked up in the styles directory, so one-off styles can live
-beside the personal ones. A path is used as given.
+A bare name is looked up in that plotter's styles directory, so one-off styles
+can live beside the personal ones. A path is used as given.
 
-`pp` prints which style sheets it used, next to the profile line.
+Both plotters print which style sheets they used, next to the profile line.
 
 ### Naming the Bragg rows
 
@@ -349,6 +365,60 @@ to the parameters the detected crystal system allows — to line simulated peaks
 with observed ones. Useful when the CIF was collected at a different temperature
 than the powder data. Prints a ready-to-paste TOPAS macro call.
 
+### What `pp` and `pq` share
+
+The two plotters grew up separately and had drifted — the same flag meant
+different things, or was spelled differently. What they have in common now works
+the same way in both, from one implementation in `core/overlays.py` and
+`document.py`:
+
+| Flag | What it does |
+|---|---|
+| `-m a,b,N ...` | Multiply the intensity in 2θ ∈ [a, b] by N. Several ranges after one `-m`; `,b,N` and `a,,N` run to the edge of the data; a fourth field colours the markers. The range is marked with dashed lines and an `x N` label. |
+| `-b x[,w[,c]] ...` | Shade a vertical strip behind everything at 2θ = x — for a small feature in the difference curve, or a weak peak, that should jump out when you look at the plot again. Width `w` in degrees, or `2%` of the plot width; 1 % and light grey by default (`band_width`, `band_color` in your style sheet). |
+| `-t [TEXT]` | A title. `-t` alone uses the fit name (`pp`) or the trace names (`pq`). |
+| `--size W H`, `--dpi N` | Figure size and raster resolution, over the style sheet. |
+| `-s`, `-x FMT`, `-v` | Save silently, in this format; talk more while doing it. |
+| `-r "(name,N,colour)"` | Reflections simulated from a CIF, as dotted lines. |
+| `--style FILE`, `-u ID` | Style sheet and profile. |
+| `-d` | Record the command — see below. |
+
+`pq` scales each trace from its own baseline, so a multiplied trace grows from
+its own place in the stack. Its old `-m "((20,40,10,blue))"` form still works.
+
+`-b` and `-m` both mark a range, but only `-b` shades: if both did, "this was
+scaled" and "look here" would read the same.
+
+```bash
+pp -s -m 20,40,10 45,,5             # two ranges, the second to the end of the data
+pp -s -b 23.4 31.2                  # two 1 % grey strips
+pp -s -b 23.4,0.3 31.2,2%,lightblue # set width and colour per strip
+```
+
+#### Keeping the command: `-d`
+
+Every tool — `pp`, `pq`, `pf`, `pt`, `rp` — takes `-d`. It writes the command
+you just ran to `run<N>.bat` in the current directory, or `run<N>_s.bat` when it
+saves its plot silently (`-s`, or `pp --gif`). Double-click it to draw the plot
+again; there is no need to keep the image.
+
+```bash
+pp -s -c --qall -m 20,40,10 -d      # plot, and write run1_s.bat
+pq -i a.xy b.xy -b 12.2 -d          # interactive, so run2.bat
+```
+
+- One counter covers both kinds, one past the highest number already there, so
+  a number is never reused and never names two files.
+- `-d` itself is left out of the file, or running it would write another.
+- Arguments are quoted and escaped for `cmd` — brackets, `%`, umlauts and 2θ in
+  a title all come back exactly as typed.
+- The file changes to its own directory first, so it redraws the same plot
+  wherever it is started from, and pauses if the command fails so the reason
+  stays on screen.
+
+A `.bat` records the command, not your style sheet or profile: after you change
+those, re-running an old one draws it in the new look.
+
 ### `pp` — Pawley plotter
 
 ```bash
@@ -356,6 +426,7 @@ pp                                  # interactive windows
 pp -s -c                            # save SVGs with unit-cell boxes
 pp -s -c -x png --qall              # PNGs, all three quality factors
 pp -s -m 20,40,10                   # multiply intensity in 2θ ∈ [20°, 40°] by 10
+pp -s -b 23.4                       # shade a strip at 23.4° to find a feature again
 pp -s -r "(ZIF-8,10,magenta)"       # overlay reflections simulated from a CIF
 pp -s --style narrow-column.toml    # one-off look on top of your own style
 ```
@@ -518,10 +589,18 @@ but moves antialiased edges, so it isn't done.
 ```bash
 pq -i a.xy b.xy --stack             # stacked comparison
 pq -i *.brml -s -x png              # save without a window
+pq -i a.xy b.xy -m 30,,4 -b 12.2    # scale the high-angle end, mark a peak
+pq -i a.xy b.xy c.cif --labels "as made" _ --colors k _ tab:red
 ```
 
-Reads `.xy`, `.raw`, `.brml`, `.dat`, PDF-card XML exports. Same `-r` reflection
-overlay as `pp`.
+Reads `.xy`, `.raw`, `.brml`, `.dat`, PDF-card XML exports. `--labels` and
+`--colors` go in input order, with `_` keeping a trace's default; `--order`
+restacks the traces afterwards and they stay attached to their files.
+
+**Changed in 0.14.0:** the `OVERRIDES` block — copy `quickplot.py` into a
+project folder and edit it — is gone. It stopped working when the suite became a
+package, and `-d` keeps a per-folder recipe without copying any code. Everything
+it could set is a flag; the look is a `pq` style sheet.
 
 Bruker `.raw` files are decoded natively — no TOPAS conversion step, so plotting
 works on a machine without a TOPAS licence. Two generations are covered:
@@ -610,10 +689,12 @@ Publishing a new version: see [RELEASING.md](RELEASING.md).
 src/achdiff/
 ├── config.py            # layered settings, profile storage
 ├── identity.py          # who is running this
-├── styles.py            # per-person plot style sheets
+├── styles.py            # per-person, per-plotter style sheets
+├── document.py          # -d: the command, kept as run<N>.bat
 ├── core/
 │   ├── rounding.py      # crystallographic rounding (one copy)
 │   ├── cif.py           # CIF resolution + reflection simulation
+│   ├── overlays.py      # -m and -b, shared by pp and pq
 │   ├── animate.py       # GIFs of a sequential run
 │   └── _molom/          # vendored MoloM crystallography (do not edit)
 └── tools/               # one module per command
@@ -628,7 +709,8 @@ knows both sides.
 `core/` exists because these helpers had drifted apart across the old
 repositories — two `cryst_round` implementations disagreed on refinement-limit
 annotations, and the reflection parser had a fix in one copy but not the other.
-Shared code lives in exactly one place now.
+`pp` and `pq` each grew their own multiply the same way. Shared code lives in
+exactly one place now.
 
 ## Credit
 

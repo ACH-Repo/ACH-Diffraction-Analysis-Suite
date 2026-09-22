@@ -16,11 +16,12 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator, MultipleLocator
+from matplotlib.colors import is_color_like
 from matplotlib.transforms import blended_transform_factory
 
-from .. import config, identity
+from .. import config, document, identity, styles
 from ..core import cif as cifcore
-from ..core import bruker
+from ..core import bruker, overlays
 from ..progname import prog_name
 
 
@@ -32,26 +33,13 @@ script_name = pathlib.Path(__file__).name
 READER_EXTENSIONS = ('xy', 'txt', 'csv', 'dat', 'raw', 'brml', 'cif', 'xml')
 
 
-SETTINGS = {
+settings = {
 	'x_range': None,
 	'y_offsetting': ['CENTER', 'TOPDOWN'][0],
 	'normalize': ['GLOBAL', 'INDIVIDUAL'][1],
 	'no_intensities': True,
 	'yoff': 0.8,
-	'title_font_size': 14,
-	'tick_label_font_size': 10,
-	'title_font_weight': 'bold',
-	'transparent': True,
-	'xlabel_font_size': 12,
-	'xlabel_font_weight': None,
-	'ylabel_font_size': 12,
-	'ylabel_font_weight': None,
-	'x_step_size': 5,
-	'line_width': 0.6,
-	'highlight_alpha': 0.18,
-	'highlight_default_color': 'red',
 	'cif_wavelength': 1.54060,  # Cu Kα1
-	'label_font_size': 9,
 	'margin_top': 0.05,          # y-axis whitespace tolerance above the data, as a fraction of data range.
 	'margin_bottom': 0.05,       # y-axis whitespace tolerance below the data, as a fraction of data range.
 	'label_x_frac': 0.98,        # x position of trace labels in axes coords (0 = left, 1 = right edge).
@@ -65,15 +53,9 @@ SETTINGS = {
 	'pdf_xml_solid_tol_fwhm': 3.0,      # solid-region padding beyond measured span, in multiples of FWHM
 	'pdf_xml_outside_linestyle': (0, (4, 3)),  # dash style for the flat extrapolated region
 
-	# Trace colors. The reflection marker palette is kept disjoint from this
-	# list so dotted reflection lines never read as a data trace.
-	'trace_color_cycle': ['tab:blue', 'tab:orange', 'tab:green', 'tab:red',
-	                      'tab:purple', 'tab:brown', 'tab:pink',
-	                      'tab:olive', 'tab:cyan'],
-
 	# Default color cycle for reflection marker sets when --reflections is used
 	# without an explicit color. Distinct saturated hues that are NOT in
-	# `trace_color_cycle`, so reflection lines never read as a data trace.
+	# `trace_colors`, so reflection lines never read as a data trace.
 	# (At a thin dotted line width, shades of gray are indistinguishable from
 	# each other and from black — so we use clearly different colours instead.)
 	'reflection_color_cycle': ['black', 'magenta', 'teal', 'goldenrod', 'darkviolet'],
@@ -85,111 +67,91 @@ SETTINGS = {
 	'reflection_label_marker': '┊ ',  # ┊ — visual hint at a dotted vertical
 	'reflection_label_inset': 0.015,  # gap from the top/right axes edges (axes-fraction)
 	'reflection_label_step': 0.045,   # vertical spacing between stacked set labels (axes-fraction)
-}
+	'multiply_label_y': 0.98,         # axes-coord y of the 'x N' label from -m
 
-
-DEFAULTS = {
-	'silent': False,
-	'input': None,
-	'verbose': False,
-	'extension': 'svg',
+	# PRESENTATION (everything a pq style sheet can reach -- see styles.py).
+	# Named as in pp wherever the two mean the same thing, so a style-sheet key
+	# means the same in both; the values are pq's own and reproduce its look.
+	'figsize': (7, 5),
 	'dpi': 300,
-	'size': (7, 5),
-	'highlights': None,
-	'title': None,
-	'stack': True,
-	'limit_extension': False,
+	'transparent': True,
+	'extension': 'svg',
+	# Trace colors. The reflection marker palette is kept disjoint from this
+	# list so dotted reflection lines never read as a data trace.
+	'trace_colors': ['tab:blue', 'tab:orange', 'tab:green', 'tab:red',
+	                 'tab:purple', 'tab:brown', 'tab:pink',
+	                 'tab:olive', 'tab:cyan'],
+	'line_width': 0.6,
+	'trace_label_size': 9,
+	'x_label_text': r'$2\theta \quad / \quad ^\circ$',
+	'y_label_text': r'$\mathrm{Intensity} \quad / \quad \mathrm{a.u.}$',
+	'size_axis_labels': 12,
+	'size_tick_labels': 10,
+	'x_tick_step': 5,
+	'ticks_top': False,
+	'tick_direction': 'in',
+	'tick_length_major': plt.rcParams['xtick.major.size'],
+	'tick_length_minor': plt.rcParams['xtick.minor.size'],
+	'title_font_size': 14,
+	'title_font_weight': 'bold',
+	'multiply_label_size': 9,
+	'band_color': 'gainsboro',
+	'band_width': 1.0,               # % of the x range
 }
 
 
-# ==========================================
-# USER OVERRIDES  (for per-project customisation)
-# ==========================================
-# When this script is copied into a project directory to serve as a custom
-# plot recipe, edit the values below instead of passing CLI flags. Anything
-# set to a non-None value overrides BOTH the CLI argument and the default —
-# so `pq` (no flags) reproduces your customisation.
-#
-# Leave entries as None / empty to fall back to the normal CLI behaviour.
-
-OVERRIDES = {
-	# ---- inputs ----
-	# Explicit list of files (replaces -i and the cwd glob). Plot stack order
-	# follows list order. Bare CIF names resolve against CIF_LOC too.
-	'inputs': None,                  # e.g. ['sample_A.xy', 'sample_B.brml', 'phase.cif']
-
-	# Per-trace colours, aligned with `inputs` above (or with whatever the
-	# script discovers if `inputs` is None). Use None in a slot to keep the
-	# default cycle colour for that trace.
-	'trace_colors': None,            # e.g. ['tab:blue', '#cc0000', None]
-
-	# Per-trace labels, aligned with `inputs`. None = use filename stem.
-	'trace_labels': None,            # e.g. ['Sample A', 'Sample B', 'Reference']
-
-	# Stacking order, top-to-bottom, as input indices. The value at display
-	# position i is the input index drawn there. e.g. [0, 2, 1, 3] keeps input
-	# 0 on top, then draws inputs 2, 1, 3 below it. None = natural input order.
-	'order': None,                   # e.g. [0, 2, 1, 3]
-
-	# ---- overlays ----
-	# Highlight bands as a Python list of tuples (a, b, multiplier, colour).
-	# Mirrors the --highlights syntax. colour may be None for the default red.
-	'highlights': None,              # e.g. [(20, 30, 3, 'blue'), (35, 45, 5, None)]
-
-	# Reflection markers, list of (cif_name, n_top, colour). colour may be None
-	# to draw from the default reflection palette.
-	'reflections': None,             # e.g. [('H2bdc', 10, 'magenta'), ('Other', 5, 'teal')]
-
-	# ---- axes / output ----
-	'x_range':   None,               # e.g. (5, 50)
-	'title':     None,               # e.g. 'sample-A..D amorphous series'
-	'figsize':   None,               # e.g. (10, 6) — overrides --size
-	'extension': None,               # e.g. 'png' — overrides --extension
-	'silent':    None,               # True / False — overrides --silent
-}
-
-
-info = '''This script automates the plotting of PXRD data files.'''
-
-parser = argparse.ArgumentParser(prog=prog_name('pq'), description=info)
-parser.add_argument('-i', '--input', nargs='+', default=DEFAULTS['input'],
-                    help='One or more data files to plot. If omitted, all readable files in cwd are collected.')
-parser.add_argument('-x', '--extension', default=DEFAULTS['extension'],
-                    help='Output image extension (svg, png, pdf, ...).')
-parser.add_argument('--dpi', type=int, default=DEFAULTS['dpi'],
-                    help='Dots per inch for raster images.')
-parser.add_argument('-t', '--title', nargs='?', const=True, type=str, default=DEFAULTS['title'],
-                    help='Set a title, or pass -t alone for an auto-generated one.')
-parser.add_argument('--size', nargs=2, type=float, default=DEFAULTS['size'],
-                    help='Plot size: WIDTH HEIGHT (inches).')
-parser.add_argument('-s', '--silent', action='store_true', default=DEFAULTS['silent'],
-                    help='Save without opening an interactive plot window.')
-parser.add_argument('-v', '--verbose', action='store_true', default=DEFAULTS['verbose'],
-                    help='Print extra info while running.')
-parser.add_argument('-m', '--highlights', default=DEFAULTS['highlights'], type=str,
-                    help='Zoom regions: "((a,b,N,color),(a,b,N))". Scales y by N inside [a,b] and shades the band.')
-parser.add_argument('--stack', action='store_true', default=DEFAULTS['stack'],
-                    help='Stack multiple PXRDs (default on).')
-parser.add_argument('-l', '--limit_extension', nargs='+', default=DEFAULTS['limit_extension'],
-                    help='Restrict --stack to these extensions (without dot).')
-parser.add_argument('-r', '--reflections', default=None, type=str,
-                    help='Overlay reflection markers from CIFs as fine vertical dotted '
-                         'lines. Format: "(name,N,color),(name,N,color),...". '
-                         f'N (count of strongest reflections) defaults to {SETTINGS["reflection_n_top"]}; color defaults '
-                         'to a distinct hue not used by the data traces. Bare CIF names '
-                         'resolve against CIF_LOC. Useful for highlighting impurity phases.')
-parser.add_argument('--labels', nargs='+', default=None,
-                    help='Per-trace labels, in input order. Use _ (a single underscore) '
-                         'in a slot to keep that trace\'s filename stem.')
-parser.add_argument('--order', default=None, type=str,
-                    help='Reorder the stack top-to-bottom by input index. The i-th value '
-                         'is the input index drawn at position i. e.g. "0,2,1,3" keeps '
-                         'input 0 on top, then draws inputs 2, 1, 3 below it.')
-parser.add_argument('--cif-loc', dest='cif_loc', default=None,
-                    help='CIF library directory for -r. Overrides the CIF_LOC env '
-                         'var and any saved profile.')
-identity.add_user_argument(parser)
-args = parser.parse_args()
+def _build_parser():
+	parser = argparse.ArgumentParser(
+		prog=prog_name('pq'),
+		description='Plots PXRD data files of various formats, stacked on one axis.')
+	parser.add_argument('-i', '--input', nargs='+', default=None,
+	                    help='One or more data files to plot. If omitted, all readable files in cwd are collected.')
+	# Default None rather than settings['extension'], as in pp: a concrete default
+	# would be indistinguishable from a typed flag and outrank the style sheet.
+	parser.add_argument('-x', '--extension', default=None,
+	                    help='Output image format used with -s, e.g. svg, png, pdf '
+	                         '(default: %s).' % settings['extension'])
+	parser.add_argument('-s', '--silent', action='store_true',
+	                    help='Save without opening an interactive plot window.')
+	parser.add_argument('-v', '--verbose', action='store_true',
+	                    help='Print extra info while running.')
+	parser.add_argument('-t', '--title', nargs='?', const=True, default=None,
+	                    help='Set a title, or pass -t alone for one built from the trace names.')
+	parser.add_argument('--size', nargs=2, type=float, default=None, metavar=('W', 'H'),
+	                    help='Figure size in inches, over the style sheet\'s figsize.')
+	parser.add_argument('--dpi', type=int, default=None,
+	                    help='Resolution of raster output, over the style sheet\'s dpi.')
+	overlays.add_arguments(parser, multiply_aliases=('--highlights',))
+	parser.add_argument('--stack', action='store_true', default=True,
+	                    help='Stack multiple PXRDs (default on).')
+	parser.add_argument('-l', '--limit_extension', nargs='+', default=None,
+	                    help='Restrict --stack to these extensions (without dot).')
+	parser.add_argument('-r', '--reflections', default=None, type=str,
+	                    help='Overlay reflection markers from CIFs as fine vertical dotted '
+	                         'lines. Format: "(name,N,color),(name,N,color),...". '
+	                         f'N (count of strongest reflections) defaults to {settings["reflection_n_top"]}; color defaults '
+	                         'to a distinct hue not used by the data traces. Bare CIF names '
+	                         'resolve against CIF_LOC. Useful for highlighting impurity phases.')
+	parser.add_argument('--labels', nargs='+', default=None,
+	                    help='Per-trace labels, in input order. Use _ (a single underscore) '
+	                         'in a slot to keep that trace\'s filename stem.')
+	parser.add_argument('--colors', nargs='+', default=None,
+	                    help='Per-trace colours, in input order, e.g. --colors k tab:red _. '
+	                         'Use _ in a slot to keep that trace\'s colour from the cycle.')
+	parser.add_argument('--order', default=None, type=str,
+	                    help='Reorder the stack top-to-bottom by input index. The i-th value '
+	                         'is the input index drawn at position i. e.g. "0,2,1,3" keeps '
+	                         'input 0 on top, then draws inputs 2, 1, 3 below it.')
+	parser.add_argument('--cif-loc', dest='cif_loc', default=None,
+	                    help='CIF library directory for -r. Overrides the CIF_LOC env '
+	                         'var and any saved profile.')
+	parser.add_argument('--style', default=None, metavar='FILE',
+	                    help='Style sheet to layer on top of the one -u already '
+	                         'selects. pq reads its own sheets, never pp\'s. See '
+	                         '`achdiff style --help`.')
+	identity.add_user_argument(parser)
+	document.add_document_argument(parser)
+	return parser
 
 
 def vprint(*a, **kw):
@@ -266,9 +228,9 @@ def read_cif(path, two_theta_range=None):
 
 	phase = cifcore.load_phase(path)
 	positions, intensities, _hkls = phase.peaks((x_lo, x_hi),
-	                                            SETTINGS['cif_wavelength'])
+	                                            settings['cif_wavelength'])
 
-	fwhm = float(getattr(args, 'broadening', SETTINGS['broadening']))
+	fwhm = float(getattr(args, 'broadening', settings['broadening']))
 	half = fwhm / 2.0
 	half_sq = half * half
 
@@ -355,7 +317,7 @@ def read_pdf_xml(path, two_theta_range=None):
 		two_theta_range = (max(0.0, meas_lo - 5.0), meas_hi + 5.0)
 	x_lo, x_hi = float(two_theta_range[0]), float(two_theta_range[1])
 
-	fwhm = float(getattr(args, 'broadening', SETTINGS['broadening']))
+	fwhm = float(getattr(args, 'broadening', settings['broadening']))
 	half_sq = (fwhm / 2.0) ** 2
 	step = max(fwhm / 10.0, 0.001)
 	x = np.arange(x_lo, x_hi + step, step)
@@ -369,7 +331,7 @@ def read_pdf_xml(path, two_theta_range=None):
 	if ymax > 0:
 		y = y / ymax
 
-	tol = SETTINGS['pdf_xml_solid_tol_fwhm'] * fwhm
+	tol = settings['pdf_xml_solid_tol_fwhm'] * fwhm
 	solid_range = (meas_lo - tol, meas_hi + tol)
 	return x, y, solid_range
 
@@ -483,7 +445,7 @@ def collect_input_paths():
 def normalize_traces(traces):
 	"""traces: list of (label, x, y). Returns a new list with y normalised."""
 	out = []
-	if SETTINGS['normalize'] == 'GLOBAL':
+	if settings['normalize'] == 'GLOBAL':
 		gmax = max(np.nanmax(y) for _, _, y in traces) or 1.0
 		for label, x, y in traces:
 			out.append((label, x, y / gmax))
@@ -496,11 +458,11 @@ def normalize_traces(traces):
 
 def offset_traces(traces):
 	"""Stack traces with constant spacing. Returns (new_traces, baselines)."""
-	yoff = SETTINGS['yoff']
+	yoff = settings['yoff']
 	N = len(traces)
 	baselines = []
 	out = []
-	if SETTINGS['y_offsetting'] == 'TOPDOWN':
+	if settings['y_offsetting'] == 'TOPDOWN':
 		# i=0 sits at top (baseline 0), each next one yoff lower.
 		for i, (label, x, y) in enumerate(traces):
 			b = -i * yoff
@@ -514,60 +476,6 @@ def offset_traces(traces):
 			baselines.append(b)
 			out.append((label, x, y + b))
 	return out, baselines
-
-
-# ==========================================
-# HIGHLIGHTS / MULTIPLICATIONS
-# ==========================================
-
-def parse_highlights(spec):
-	"""Parse e.g. "((10,20,3,r),(5,7,10))" → [(a,b,N,color_or_None), ...]."""
-	if not spec:
-		return []
-	out = []
-	# Match inner tuples — content between ( and ) excluding nested parens.
-	for inner in re.findall(r'\(([^()]*)\)', spec):
-		parts = [p.strip() for p in inner.split(',')]
-		if len(parts) < 3:
-			print(f'[!] Skipping highlight "{inner}": need at least a,b,N.')
-			continue
-		try:
-			a = float(parts[0])
-			b = float(parts[1])
-			n = float(parts[2])
-		except ValueError:
-			print(f'[!] Skipping highlight "{inner}": non-numeric a/b/N.')
-			continue
-		color = parts[3] if len(parts) > 3 and parts[3] else None
-		out.append((a, b, n, color))
-	return out
-
-
-def apply_highlights(ax, traces, baselines, highlights):
-	"""Scale y inside [a,b] by N around each trace's baseline, shade the band, label x N."""
-	if not highlights:
-		return traces
-
-	xmin, xmax = ax.get_xlim() if ax.get_xlim() != (0.0, 1.0) else (None, None)
-
-	new_traces = []
-	for (label, x, y), baseline in zip(traces, baselines):
-		y_new = y.copy()
-		for a, b, n, _ in highlights:
-			mask = (x >= a) & (x <= b)
-			# Multiply the signal above the baseline by N.
-			y_new[mask] = baseline + (y_new[mask] - baseline) * n
-		new_traces.append((label, x, y_new))
-
-	# Draw shading + labels once on the axes (not per-trace).
-	for a, b, n, color in highlights:
-		c = color or SETTINGS['highlight_default_color']
-		ax.axvspan(a, b, color=c, alpha=SETTINGS['highlight_alpha'], zorder=0)
-		trans = blended_transform_factory(ax.transData, ax.transAxes)
-		ax.text((a + b) / 2.0, 1.0, f'x {n:g}', ha='center', va='top',
-		        fontsize=SETTINGS['label_font_size'], transform=trans)
-
-	return new_traces
 
 
 # ==========================================
@@ -620,24 +528,24 @@ def draw_reflection_lines(ax, ref_sets):
 		for p in positions:
 			ax.axvline(p,
 			           color=color,
-			           linestyle=SETTINGS['reflection_linestyle'],
-			           linewidth=SETTINGS['reflection_linewidth'],
-			           alpha=SETTINGS['reflection_alpha'],
+			           linestyle=settings['reflection_linestyle'],
+			           linewidth=settings['reflection_linewidth'],
+			           alpha=settings['reflection_alpha'],
 			           zorder=1)
 	# Stacked labels just INSIDE the top-right corner so they stay within the
 	# plotting box. The first set sits at the top; subsequent sets stack
 	# downward. The top-right interior of a stacked PXRD is the topmost trace's
 	# high-angle tail, which is normally flat, so labels rarely collide with data.
-	pad = SETTINGS['reflection_label_inset']
-	step = SETTINGS['reflection_label_step']
+	pad = settings['reflection_label_inset']
+	step = settings['reflection_label_step']
 	for i, (label, _pos, color) in enumerate(ref_sets):
 		y = (1.0 - pad) - i * step
 		ax.text(1.0 - pad, y,
-		        SETTINGS['reflection_label_marker'] + label,
+		        settings['reflection_label_marker'] + label,
 		        transform=ax.transAxes,
 		        color=color,
 		        ha='right', va='top',
-		        fontsize=SETTINGS['reflection_label_font_size'])
+		        fontsize=settings['reflection_label_font_size'])
 
 
 # ==========================================
@@ -645,22 +553,21 @@ def draw_reflection_lines(ax, ref_sets):
 # ==========================================
 
 def style(ax):
-	ax.set_xlabel(r'$2\theta \quad / \quad ^\circ$',
-	              fontsize=SETTINGS['xlabel_font_size'],
-	              fontweight=SETTINGS['xlabel_font_weight'] or 'normal',
-	              labelpad=6)
-	ax.set_ylabel(r'$\mathrm{Intensity} \quad / \quad \mathrm{a.u.}$',
-	              fontsize=SETTINGS['ylabel_font_size'],
-	              fontweight=SETTINGS['ylabel_font_weight'] or 'normal',
-	              labelpad=6)
+	ax.set_xlabel(settings['x_label_text'], fontsize=settings['size_axis_labels'], labelpad=6)
+	ax.set_ylabel(settings['y_label_text'], fontsize=settings['size_axis_labels'], labelpad=6)
 
-	if SETTINGS['no_intensities']:
+	if settings['no_intensities']:
 		ax.set_yticks([])
 
-	ax.xaxis.set_major_locator(MultipleLocator(SETTINGS['x_step_size']))
+	if settings['x_tick_step']:
+		ax.xaxis.set_major_locator(MultipleLocator(settings['x_tick_step']))
 	ax.xaxis.set_minor_locator(AutoMinorLocator())
 	ax.tick_params(axis='both', which='both',
-	               labelsize=SETTINGS['tick_label_font_size'], direction='in')
+	               labelsize=settings['size_tick_labels'],
+	               direction=settings['tick_direction'],
+	               top=settings['ticks_top'])
+	ax.tick_params(axis='both', which='major', length=settings['tick_length_major'])
+	ax.tick_params(axis='both', which='minor', length=settings['tick_length_minor'])
 
 
 def derive_label(path):
@@ -671,31 +578,36 @@ def derive_label(path):
 # MAIN
 # ==========================================
 
-def _apply_overrides_to_args():
-	"""Mutate `args` in place so OVERRIDES win over CLI/defaults.
-
-	Per-trace fields (colors, labels) and the structured overlay lists are not
-	on the argparse namespace; main() reads them straight from OVERRIDES."""
-	# args.input gets handled by collect_input_paths() reading OVERRIDES.
-	if OVERRIDES.get('title') is not None:
-		args.title = OVERRIDES['title']
-	if OVERRIDES.get('figsize') is not None:
-		args.size = OVERRIDES['figsize']
-	if OVERRIDES.get('extension') is not None:
-		args.extension = OVERRIDES['extension']
-	if OVERRIDES.get('silent') is not None:
-		args.silent = OVERRIDES['silent']
-
-
 def main():
-	_apply_overrides_to_args()
+	global args, CIF_LOC
+	parser = _build_parser()
+	args = parser.parse_args()
+	if args.document:
+		document.write_run_file(parser, 'pq', 'achdiff.tools.quickplot', silent=args.silent)
 
 	# Resolve the person, then their CIF library. Announced rather than silent so a
 	# wrong profile can't quietly point -r at someone else's structures.
-	global CIF_LOC
 	user, source = identity.resolve(args.user)
 	if args.user or user:
 		print(identity.describe(user, source))
+
+	# Before anything is drawn, as in pp: figsize and the font sizes feed the
+	# layout. Announced for the same reason the profile is.
+	try:
+		applied = styles.apply('pq', settings, user=user, explicit=args.style)
+	except FileNotFoundError as e:
+		print(f'[!] {e}')
+		return 2
+	if applied:
+		print(f'[*] Style: {applied}')
+
+	# After the style, so the sheet's values hold unless a flag was typed.
+	settings['extension'] = (args.extension or settings['extension']).lstrip('.').lower()
+	if args.size:
+		settings['figsize'] = tuple(args.size)
+	if args.dpi:
+		settings['dpi'] = args.dpi
+
 	CIF_LOC = config.get('cif_loc', cli_value=args.cif_loc, user=user)
 
 	if args.save_profile:
@@ -705,24 +617,9 @@ def main():
 			path = config.save_profile(args.user, {'cif_loc': CIF_LOC})
 			print(f'[+] Saved profile {args.user} to {path}')
 
-	# OVERRIDES['inputs'] (if set) replaces both -i and the cwd glob.
-	if OVERRIDES.get('inputs'):
-		paths = []
-		for entry in OVERRIDES['inputs']:
-			if os.path.exists(entry):
-				paths.append(entry)
-				continue
-			cif_candidate = os.path.join(CIF_LOC, entry)
-			if os.path.exists(cif_candidate):
-				paths.append(cif_candidate)
-				continue
-			print(f'[!] Override input not found: {entry} '
-			      f'(also tried {cif_candidate!r})')
-	else:
-		paths = collect_input_paths()
+	paths = collect_input_paths()
 	if not paths:
-		print('[-] No input files found. Pass -i, edit OVERRIDES["inputs"], '
-		      'or place data files in the cwd.')
+		print('[-] No input files found. Pass -i, or place data files in the cwd.')
 		return 1
 
 	vprint(f'[+] Plotting {len(paths)} file(s):')
@@ -815,36 +712,37 @@ def main():
 		print('[-] Nothing read successfully.')
 		return 1
 
-	# The next three steps all operate in INPUT order (i.e. aligned with -i /
-	# OVERRIDES['inputs']), so labels and colours stay attached to their source
-	# file. Reordering is applied last and permutes everything together — so the
-	# user supplies --labels / --colors / --order all in the same input order.
+	# The next three steps all operate in INPUT order (i.e. aligned with -i), so
+	# labels and colours stay attached to their source file. Reordering is
+	# applied last and permutes everything together — so the user supplies
+	# --labels / --colors / --order all in the same input order.
 
-	# --- per-trace labels: OVERRIDES['trace_labels'] wins over --labels. ---
-	# A slot value of None or '_' keeps that trace's filename-stem label.
-	label_override = OVERRIDES.get('trace_labels') or args.labels
-	if label_override:
-		traces = [((label_override[i] if i < len(label_override)
-		            and label_override[i] not in (None, '_') else lbl), x, y)
+	# --- per-trace labels. A slot of '_' keeps that trace's filename stem. ---
+	if args.labels:
+		traces = [((args.labels[i] if i < len(args.labels)
+		            and args.labels[i] != '_' else lbl), x, y)
 		          for i, (lbl, x, y) in enumerate(traces)]
 
-	# --- per-trace colours: OVERRIDES['trace_colors'] wins over default cycle. ---
+	# --- per-trace colours: --colors over the style's cycle, '_' keeps the cycle's. ---
 	# Computed here (input order) so a colour stays with its trace through a
 	# reorder. The trace cycle is disjoint from the reflection palette so the
 	# two never collide.
-	color_cycle = SETTINGS['trace_color_cycle']
-	color_override = OVERRIDES.get('trace_colors') or []
-	trace_colors = [color_override[i] if i < len(color_override) and color_override[i]
+	color_cycle = settings['trace_colors']
+	color_override = args.colors or []
+	for c in color_override:
+		if c != '_' and not is_color_like(c):
+			print(f'[!] --colors: {c!r} is not a colour matplotlib knows; that trace '
+			      f'keeps its colour from the cycle.')
+	trace_colors = [color_override[i]
+	                if i < len(color_override) and color_override[i] != '_'
+	                and is_color_like(color_override[i])
 	                else color_cycle[i % len(color_cycle)]
 	                for i in range(len(traces))]
 
-	# --- reorder the stack top-to-bottom: OVERRIDES['order'] wins over --order. ---
+	# --- reorder the stack top-to-bottom. ---
 	# Indices refer to successfully-read traces in input order. The value at
 	# position i is the input index drawn at display position i.
-	order = OVERRIDES.get('order')
-	if order is None and args.order:
-		order = parse_order(args.order)
-	order = validate_order(order, len(traces))
+	order = validate_order(parse_order(args.order), len(traces))
 	if order is not None:
 		traces = [traces[i] for i in order]
 		trace_colors = [trace_colors[i] for i in order]
@@ -858,38 +756,44 @@ def main():
 	traces, baselines = offset_traces(traces) if (args.stack or len(traces) > 1) \
 	                    else (traces, [0.0] * len(traces))
 
-	fig, ax = plt.subplots(figsize=tuple(args.size), layout='constrained')
+	fig, ax = plt.subplots(figsize=settings['figsize'], layout='constrained')
 
-	# Determine x-range. Precedence: OVERRIDES > SETTINGS > derived from data.
-	if OVERRIDES.get('x_range') is not None:
-		ax.set_xlim(*OVERRIDES['x_range'])
-	elif SETTINGS['x_range']:
-		ax.set_xlim(*SETTINGS['x_range'])
+	# Determine x-range: settings['x_range'] if set, else the data's.
+	if settings['x_range']:
+		ax.set_xlim(*settings['x_range'])
 	else:
 		ax.set_xlim(global_x_lo, global_x_hi)
+	x_lo, x_hi = ax.get_xlim()
 
-	# Highlights: prefer OVERRIDES (structured tuple list) over the CLI string.
-	if OVERRIDES.get('highlights') is not None:
-		highlights = list(OVERRIDES['highlights'])
-	else:
-		highlights = parse_highlights(args.highlights)
-	traces = apply_highlights(ax, traces, baselines, highlights)
+	# -m: each trace is scaled about its own baseline, so it grows from its own
+	# place in the stack rather than from the bottom of the figure.
+	ranges = overlays.resolve(overlays.parse_multiply(args.multiply), x_lo, x_hi)
+	if ranges:
+		traces = [(label, x, overlays.scale(x, y, ranges, baseline=b))
+		          for (label, x, y), b in zip(traces, baselines)]
+	overlays.draw_bands(ax, overlays.parse_bands(args.band), x_lo, x_hi,
+	                    default_width_pct=settings['band_width'],
+	                    default_color=settings['band_color'])
 
 	# Plot each trace (colours computed above, aligned through the reorder).
 	# A PDF-card trace carries a solid_range: its measured window is drawn solid
 	# and the flat extrapolated region dashed. The full dashed line is laid down
 	# first; the solid line then overpaints the measured window, so the two join
 	# seamlessly with no gap at the boundary.
-	dash_style = SETTINGS['pdf_xml_outside_linestyle']
+	dash_style = settings['pdf_xml_outside_linestyle']
 	for (label, x, y), c, solid_range in zip(traces, trace_colors, trace_solid_ranges):
 		if solid_range is None:
-			ax.plot(x, y, lw=SETTINGS['line_width'], color=c, label=label)
+			ax.plot(x, y, lw=settings['line_width'], color=c, label=label)
 		else:
 			s_lo, s_hi = solid_range
-			ax.plot(x, y, lw=SETTINGS['line_width'], color=c,
+			ax.plot(x, y, lw=settings['line_width'], color=c,
 			        ls=dash_style, label='_nolegend_')
 			y_solid = np.where((x >= s_lo) & (x <= s_hi), y, np.nan)
-			ax.plot(x, y_solid, lw=SETTINGS['line_width'], color=c, label=label)
+			ax.plot(x, y_solid, lw=settings['line_width'], color=c, label=label)
+
+	overlays.draw_multiply_marks(ax, ranges, x_lo, x_hi,
+	                             label_y=settings['multiply_label_y'],
+	                             fontsize=settings['multiply_label_size'])
 
 	# Derive y-limits from the actual plotted data, but also include the
 	# stacking baselines. A trace with a non-zero amorphous background has a
@@ -902,19 +806,19 @@ def main():
 		y_lo = min(y_lo, min(baselines))
 		y_hi = max(y_hi, max(baselines))
 	y_range = y_hi - y_lo if y_hi > y_lo else 1.0
-	ax.set_ylim(y_lo - SETTINGS['margin_bottom'] * y_range,
-	            y_hi + SETTINGS['margin_top'] * y_range)
+	ax.set_ylim(y_lo - settings['margin_bottom'] * y_range,
+	            y_hi + settings['margin_top'] * y_range)
 
 	# In-plot trace labels: sit just BELOW each baseline near the right edge,
 	# in the empty strip between this trace's zero and the next trace down.
 	# Works because PXRD intensities are non-negative.
 	trans = blended_transform_factory(ax.transAxes, ax.transData)
-	label_y_pad = SETTINGS['label_y_pad_frac'] * y_range
+	label_y_pad = settings['label_y_pad_frac'] * y_range
 	trace_label_artists = []
 	for (label, _x, _y), baseline, c in zip(traces, baselines, trace_colors):
-		txt = ax.text(SETTINGS['label_x_frac'], baseline - label_y_pad, label,
+		txt = ax.text(settings['label_x_frac'], baseline - label_y_pad, label,
 		              ha='right', va='top',
-		              fontsize=SETTINGS['label_font_size'],
+		              fontsize=settings['trace_label_size'],
 		              color=c,
 		              transform=trans)
 		trace_label_artists.append(txt)
@@ -938,18 +842,13 @@ def main():
 
 	# Reflection markers: simulate the top-N peaks per CIF and overlay them as
 	# fine dotted vertical lines, colour-coded per set, with a label legend
-	# anchored just above the axes top-right corner. OVERRIDES['reflections']
-	# accepts the same tuples as the CLI parser already returns.
-	if OVERRIDES.get('reflections') is not None:
-		ref_specs = list(OVERRIDES['reflections'])
-	else:
-		ref_specs = args.reflections
+	# anchored just above the axes top-right corner.
 	ref_sets = cifcore.collect_reflection_sets(
-		ref_specs,
+		args.reflections,
 		(global_x_lo, global_x_hi),
-		palette=SETTINGS['reflection_color_cycle'],
+		palette=settings['reflection_color_cycle'],
 		cif_dir=CIF_LOC,
-		wavelength=SETTINGS['cif_wavelength'],
+		wavelength=settings['cif_wavelength'],
 		verbose_print=vprint)
 
 	draw_reflection_lines(ax, ref_sets)
@@ -959,8 +858,8 @@ def main():
 		title_text = args.title if isinstance(args.title, str) else \
 		             ' / '.join(t[0] for t in traces)
 		ax.set_title(title_text,
-		             fontsize=SETTINGS['title_font_size'],
-		             fontweight=SETTINGS['title_font_weight'])
+		             fontsize=settings['title_font_size'],
+		             fontweight=settings['title_font_weight'])
 
 	style(ax)
 
@@ -968,11 +867,11 @@ def main():
 	if args.silent:
 		# Build a sensible output name. Single file → its stem; many → "stack".
 		stem = traces[0][0] if len(traces) == 1 else 'PXRD_stack'
-		out_name = f'{stem}.{args.extension}'
+		out_name = f'{stem}.{settings["extension"]}'
 		plt.savefig(out_name,
-		            dpi=args.dpi,
+		            dpi=settings['dpi'],
 		            bbox_inches='tight',
-		            transparent=SETTINGS['transparent'])
+		            transparent=settings['transparent'])
 		vprint(f'[+] Saved -> {out_name}')
 		plt.close(fig)
 	else:

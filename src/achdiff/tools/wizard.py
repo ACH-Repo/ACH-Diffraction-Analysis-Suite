@@ -18,7 +18,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from string import Template
 
-from .. import config, identity
+from .. import config, document, identity
 from ..core import cif as cifcore
 from ..progname import prog_name
 
@@ -447,11 +447,17 @@ def _build_parser():
 	                         'the file, and silently correcting it writes a group into '
 	                         'your .inp that nobody claimed.')
 	identity.add_user_argument(parser)
+	document.add_document_argument(parser)
 	return parser
 
 
 def main():
-	args = _build_parser().parse_known_args()[0]
+	# parse_args, not parse_known_args: a mistyped flag must stop the run, not
+	# be dropped -- least of all when -d is about to write it down.
+	parser = _build_parser()
+	args = parser.parse_args()
+	if args.document:
+		document.write_run_file(parser, 'rp', 'achdiff.tools.wizard')
 
 	# `rp somefit.inp` is a direct engine run, not a wizard session: the file
 	# already exists, usually because it was edited by hand after generation.

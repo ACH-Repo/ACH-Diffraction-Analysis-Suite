@@ -8,11 +8,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.lines import Line2D
-from matplotlib.ticker import AutoMinorLocator
-from matplotlib.transforms import blended_transform_factory
+from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 
-from .. import config, identity, styles
-from ..core import animate
+from .. import config, document, identity, styles
+from ..core import animate, overlays
 from ..progname import prog_name
 from ..core.rounding import cryst_round, split_value_bracket
 from ..core import cif as cifcore
@@ -67,6 +66,7 @@ settings = {
 	'y_label_text': r'$\mathrm{Intensity} \quad / \quad \mathrm{a.u.}$',
 	'size_axis_labels': 11,
 	'size_tick_labels': 10,
+	'x_tick_step': 0,               # degrees between numbered x ticks; 0 = matplotlib's choice
 	'ticks_top': False,             # mirror the x ticks onto the top edge
 	'tick_direction': 'in',
 	# Taken from the live rcParams rather than hardcoded, so that leaving these
@@ -110,6 +110,9 @@ settings = {
 	'box_data_clearance': 0.02,     # Minimum clearance (axes coords) to keep above the data envelope
 	'pastel_weight': 0.78,          # Blend factor toward white for info-box background tinting
 	'multiply_label_y': 0.98,       # Axes-coord y for the 'x N' annotation from -m
+	'multiply_label_size': 10,      # Point size of that annotation
+	'band_color': 'gainsboro',      # -b strip colour when the strip names none
+	'band_width': 1.0,              # -b strip width when the strip names none, % of the x range
 
 	# REFLECTION OVERLAY (-r): CIF-simulated markers for phases outside the fit
 	'cif_dir_path': r'D:\Workfolder\<you>\CIF_LOC',  # bare -r names resolve against this
@@ -141,9 +144,19 @@ def _build_parser():
 		prog=prog_name('pp'),
 		description='Plots the result of a TOPAS Pawley fit using output files.')
 	parser.add_argument('-i', '--input', type=str, nargs='+', default=defaults['input'])
-	parser.add_argument('-s', '--silent', action='store_true', default=defaults['silent'])
+	parser.add_argument('-s', '--silent', action='store_true', default=defaults['silent'],
+	                    help='Save each plot without opening a window.')
+	parser.add_argument('-v', '--verbose', action='store_true',
+	                    help='Print extra info while running.')
 	parser.add_argument('-c', '--cell_info', action='store_true', help='Include unit cell parameter boxes on the plot.')
-	parser.add_argument('-m', '--multiply', nargs='+', help='Format: a,b,N. Use ,b,N or a,,N for limits.')
+	overlays.add_arguments(parser)
+	parser.add_argument('-t', '--title', nargs='?', const=True, default=None,
+	                    help='Title every plot with this text, or pass -t alone to use '
+	                         'each fit\'s name.')
+	parser.add_argument('--size', nargs=2, type=float, default=None, metavar=('W', 'H'),
+	                    help='Figure size in inches, over the style sheet\'s figsize.')
+	parser.add_argument('--dpi', type=int, default=None,
+	                    help='Resolution of raster output, over the style sheet\'s dpi.')
 	# Default None rather than settings['extension']: argparse captures its default
 	# at parser-build time, so a concrete one here would be indistinguishable from
 	# a flag the user typed and would silently outrank a style sheet's `extension`.
@@ -226,6 +239,7 @@ def _build_parser():
 	                         'column width, say -- without editing your own. See '
 	                         '`achdiff style --help`.')
 	identity.add_user_argument(parser)
+	document.add_document_argument(parser)
 	return parser
 
 
@@ -986,8 +1000,8 @@ def stack_artists_vertically(ax, N_lines,
 		# the occasional large spike. Note: no multiplier here — the previous
 		# `* diff_shift_factor` was an operator-precedence bug that shifted the
 		# curve upward (toward the Bragg ticks) by ~20% of |ac2dc(baseline)|.
-		# Use N_lines - 1 (not -1) because process_multiplication may have appended
-		# axvline objects to ax.lines after the original data lines were plotted.
+		# Use N_lines - 1 (not -1) because the -m range markers are axvlines
+		# appended to ax.lines after the original data lines were plotted.
 		diff_baseline_axes = y_tol_bottom + d_difference / 2
 		shift = float(np.median(y_diff)) - ac2dc(diff_baseline_axes)
 		diff_line.set_ydata(y_diff - shift)
@@ -998,80 +1012,14 @@ def stack_artists_vertically(ax, N_lines,
 		print(f"Warning: Skipping vertical scaling alignment due to formatting error: {e}")
 
 
-# ==========================================
-# MULTIPLICATION LOGIC
-# ==========================================
-
-def process_multiplication(ax, multi_args):
-	# exp (line 0), calc (line 1), diff (last line)
-	target_indices = [0, 1, -1]
-	
-	for arg in multi_args:
-		try:
-			parts = arg.split(',')
-			a_str, b_str, n_str = parts[0], parts[1], parts[2]
-			
-			# Determine x-range
-			x_min_data = ax.lines[1].get_xdata().min()
-			x_max_data = ax.lines[1].get_xdata().max()
-			
-			a = float(a_str) if a_str else x_min_data
-			b = float(b_str) if b_str else x_max_data
-			n = float(n_str)
-			
-			# Apply to exp, calc, and diff
-			for idx in target_indices:
-				line = ax.lines[idx]
-				x, y = line.get_data()
-				mask = (x >= a) & (x <= b)
-				y[mask] *= n
-				line.set_data(x, y)
-			
-			for x_val in [a, b]:
-				ax.axvline(x=x_val, color='k', linestyle='--', linewidth=0.8, alpha=0.5,
-				           label='_nolegend_')
-			
-			label_text = f"x {n}"
-			# Dynamic placement: anchor the label to the boundary of [a, b] closest to
-			# the plot centre and align horizontally inward, so the text sits inside
-			# the multiplied range and stays clear of the upper-right legend.
-			# Clip to the data range so user-supplied bounds outside the data don't
-			# push the label off the axes.
-			a_clip = max(a, x_min_data)
-			b_clip = min(b, x_max_data)
-			plot_mid = (x_min_data + x_max_data) / 2
-			range_mid = (a_clip + b_clip) / 2
-			dead_zone = (x_max_data - x_min_data) * 0.1
-
-			if range_mid < plot_mid - dead_zone:
-				text_x, ha = b_clip, 'right'
-			elif range_mid > plot_mid + dead_zone:
-				text_x, ha = a_clip, 'left'
-			else:
-				text_x, ha = range_mid, 'center'
-
-			# If the anchor is too close to a plot edge for the ha direction to fit
-			# the text inside the axes, flip the alignment.
-			anchor_ax = (text_x - x_min_data) / (x_max_data - x_min_data)
-			if ha == 'left' and anchor_ax > 0.85:
-				ha = 'right'
-			elif ha == 'right' and anchor_ax < 0.15:
-				ha = 'left'
-
-			trans = blended_transform_factory(ax.transData, ax.transAxes)
-			ax.text(text_x, settings['multiply_label_y'], label_text,
-			        ha=ha, va='top', fontsize=10, transform=trans)
-			
-		except (ValueError, IndexError) as e:
-			print(f"Skipping invalid multiplication argument {arg}: {e}")
-
-
 def style(ax):
 	ax.set_xlabel(settings['x_label_text'], size=settings['size_axis_labels'], labelpad=7)
 	ax.set_ylabel(settings['y_label_text'], size=settings['size_axis_labels'], labelpad=7)
 	# No y ticks: a Pawley fit's intensities are on an arbitrary scale, so numbering
 	# them would invite a reading they cannot support.
 	ax.set_yticks([])
+	if settings['x_tick_step']:
+		ax.xaxis.set_major_locator(MultipleLocator(settings['x_tick_step']))
 	ax.xaxis.set_minor_locator(AutoMinorLocator())
 	ax.tick_params(axis='both', which='both',
 	               labelsize=settings['size_tick_labels'],
@@ -1600,9 +1548,22 @@ def _write_animations(frames_by_format, cell_series, stem, delay_ms, relative=Tr
 		      'Pass --x-values for a quantitative axis.')
 
 
+def vprint(*a, **kw):
+	if args.verbose:
+		print(*a, **kw)
+
+
 def main():
 	global args
-	args = _build_parser().parse_known_args()[0]
+	# parse_args, not parse_known_args: a mistyped flag used to be dropped without
+	# a word, so `--multply 20,40,10` drew an unscaled plot -- and with -d, wrote
+	# that into a file that claimed otherwise.
+	parser = _build_parser()
+	args = parser.parse_args()
+	if args.document:
+		# --gif saves too, so it counts as a silent run.
+		document.write_run_file(parser, 'pp', 'achdiff.tools.plotter',
+		                        silent=bool(args.silent or args.gif))
 
 	# Resolve the person, then their settings. Announced rather than silent: a
 	# wrong profile means a wrong CIF library, and that should never be invisible.
@@ -1616,7 +1577,7 @@ def main():
 	# for the same reason the profile is -- a figure that silently came out in
 	# someone else's house style is a figure you republish by accident.
 	try:
-		applied = styles.apply(settings, user=user, explicit=args.style)
+		applied = styles.apply('pp', settings, user=user, explicit=args.style)
 	except FileNotFoundError as e:
 		print(f'[!] {e}')
 		raise SystemExit(2)
@@ -1624,8 +1585,16 @@ def main():
 		print(f'[*] Style: {applied}')
 
 	# Resolved after the style, so `extension` in a style sheet is honoured while
-	# an explicit -x still wins.
+	# an explicit -x still wins. --size and --dpi likewise.
 	settings['extension'] = (args.extension or settings['extension']).lstrip('.').lower()
+	if args.size:
+		settings['figsize'] = tuple(args.size)
+	if args.dpi:
+		settings['dpi'] = args.dpi
+
+	# Parsed once, so a bad group is reported once rather than once per fit.
+	multiply = overlays.parse_multiply(args.multiply)
+	bands = overlays.parse_bands(args.band)
 
 	settings['cif_dir_path'] = config.get('cif_loc', cli_value=args.cif_loc, user=user)
 	# store_true can't distinguish "absent" from "off", so only an explicit --qall
@@ -1685,6 +1654,8 @@ def main():
 		formats = list(dict.fromkeys(formats))   # "gif,gif" means gif once
 
 	runnable = [g for g in group_names if not _missing_pieces(file_dicts[g])]
+	vprint(f'[v] {len(runnable)} complete fit(s) here'
+	       + (f': {", ".join(runnable)}' if runnable else ''))
 
 	if args.x_map_template:
 		prefill, source = None, ''
@@ -1886,13 +1857,26 @@ def main():
 
 		# Layout, legend, optional decorations
 		N_files = 2 + len(pos_files) + 1  # exp + calc + Bragg rows + diff
-		if args.multiply:
-			process_multiplication(ax, args.multiply)
+		x_lo = ax.lines[1].get_xdata().min()
+		x_hi = ax.lines[1].get_xdata().max()
+		if multiply:
+			ranges = overlays.resolve(multiply, x_lo, x_hi)
+			# Every range is applied before any marker is drawn: the markers are
+			# lines too, and the difference curve is found by its position.
+			for line in (ax.lines[0], ax.lines[1], ax.lines[N_files - 1]):
+				xs, ys = line.get_data()
+				line.set_data(xs, overlays.scale(xs, ys, ranges))
+			overlays.draw_multiply_marks(ax, ranges, x_lo, x_hi,
+			                             label_y=settings['multiply_label_y'],
+			                             fontsize=settings['multiply_label_size'])
+		overlays.draw_bands(ax, bands, x_lo, x_hi,
+		                    default_width_pct=settings['band_width'],
+		                    default_color=settings['band_color'])
 		stack_artists_vertically(ax, N_files, common_scale=common_scale)
 		# Reflection overlay goes in after both of the above and before the legend:
-		# process_multiplication reaches the difference curve as ax.lines[-1], so any
-		# axvline appended earlier would silently retarget it, and add_legend builds its
-		# entries from whatever is in ax.lines when it runs.
+		# stack_artists_vertically finds the difference curve by its position in
+		# ax.lines, and add_legend builds its entries from whatever is in ax.lines
+		# when it runs.
 		if args.reflections:
 			draw_reflection_lines(ax, cifcore.collect_reflection_sets(
 				args.reflections,
@@ -1907,6 +1891,10 @@ def main():
 			add_quality(ax, outfile_info, show_all=qall)
 		if args.cell_info:
 			add_unit_cell_boxes(ax, ordered_phases, ordered_box_colors)
+		if args.title:
+			ax.set_title(args.title if isinstance(args.title, str) else group_name,
+			             fontsize=settings['title_font_size'],
+			             fontweight=settings['title_font_weight'])
 		style(ax)
 
 		if args.gif:
@@ -1925,6 +1913,7 @@ def main():
 			outfile_name = f"{group_name}.{settings['extension']}"
 			plt.savefig(outfile_name, dpi=settings['dpi'], bbox_inches='tight',
 			            transparent=settings['transparent'])
+			vprint(f'[+] Saved -> {outfile_name}')
 			plt.close(fig)
 		else:
 			plt.show()

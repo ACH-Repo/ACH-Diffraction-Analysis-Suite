@@ -221,9 +221,10 @@ check('...and is enough for filename inference to recognise the person',
 import re  # noqa: E402
 
 from achdiff import styles  # noqa: E402
-from achdiff.tools import plotter  # noqa: E402
+from achdiff.tools import plotter, quickplot  # noqa: E402
 
-_STYLE_DIR = Path(_TMP) / styles.STYLES_DIRNAME
+# pp's sheets; pq's live beside them in styles/pq/ and are tested further down.
+_STYLE_DIR = Path(_TMP) / styles.STYLES_DIRNAME / 'pp'
 _STYLE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -237,7 +238,7 @@ def applied(user=None, explicit=None, **seed):
 	"""Run a style over a throwaway settings dict and hand back the result."""
 	target = dict(plotter.settings)
 	target.update(seed)
-	styles.apply(target, user=user, explicit=explicit)
+	styles.apply('pp', target, user=user, explicit=explicit)
 	return target
 
 
@@ -280,7 +281,7 @@ check('good values in a file with bad ones still apply',
       bad['legend_loc'], 'lower left')
 
 try:
-	styles.apply(dict(plotter.settings), explicit=str(_STYLE_DIR / 'nope.toml'))
+	styles.apply('pp', dict(plotter.settings), explicit=str(_STYLE_DIR / 'nope.toml'))
 	check('a --style file that does not exist is an error', 'no raise', 'FileNotFoundError')
 except FileNotFoundError:
 	check('a --style file that does not exist is an error',
@@ -291,13 +292,13 @@ except FileNotFoundError:
 # friction with nothing behind it.
 write_style('narrow', '[figure]\nfigsize = [3.3, 4.0]\n')
 check('--style takes a bare name from the styles directory',
-      styles.resolve_named_style('narrow').name, 'narrow.toml')
+      styles.resolve_named_style('pp', 'narrow').name, 'narrow.toml')
 check('...and the same name with its suffix',
-      styles.resolve_named_style('narrow.toml').name, 'narrow.toml')
+      styles.resolve_named_style('pp', 'narrow.toml').name, 'narrow.toml')
 check('a bare name layers on top of the personal style',
       applied('SS', explicit='narrow')['figsize'], (3.3, 4.0))
 check('a name matching nothing comes back as typed, for the error to quote',
-      styles.resolve_named_style('nope').name, 'nope')
+      styles.resolve_named_style('pp', 'nope').name, 'nope')
 
 # `style install` checks a file before copying it, so a typo in something a
 # colleague sent is caught while it is still obvious what to do about it.
@@ -305,7 +306,7 @@ _check_src = Path(tempfile.mkdtemp()) / 'sent.toml'
 _check_src.write_text("[axes]\ny_label = 'ok'\n"
                       "legend_columsn = 2\n"
                       "tick_direction = 'sideways'\n", encoding='utf-8')
-_good, _unknown, _invalid = styles.validate(_check_src)
+_good, _unknown, _invalid = styles.validate('pp', _check_src)
 check('validate reports the keys that would apply', _good, ['y_label'])
 check('...the ones it does not know', _unknown, ['legend_columsn'])
 check('...and the ones it cannot use, with a reason',
@@ -314,19 +315,23 @@ check('...and the ones it cannot use, with a reason',
 # `achdiff style init` writes the catalogue people edit. Every line in it must be
 # a key the loader knows and a value it accepts, or the first thing anyone
 # uncomments is a warning.
-tpl = styles.template('SS')
-uncommented = re.sub(r'^# (?=\w+ = )', '', tpl, flags=re.MULTILINE)
-parsed = config.tomllib.loads(uncommented)
-flat = {}
-for _k, _v in parsed.items():
-	flat.update(_v) if isinstance(_v, dict) else flat.update({_k: _v})
-check('the template lists every setting in the schema',
-      sorted(flat) == sorted(styles.BY_NAME), True)
-write_style('TPL', uncommented)
-round_tripped = applied('TPL')
-check('reading the template back reproduces the built-in values exactly',
-      [k.name for k in styles.BY_NAME.values()
-       if round_tripped[k.target] != plotter.settings[k.target]], [])
+for _tool, _module in (('pp', plotter), ('pq', quickplot)):
+	tpl = styles.template(_tool, 'SS')
+	uncommented = re.sub(r'^# (?=\w+ = )', '', tpl, flags=re.MULTILINE)
+	parsed = config.tomllib.loads(uncommented)
+	flat = {}
+	for _k, _v in parsed.items():
+		flat.update(_v) if isinstance(_v, dict) else flat.update({_k: _v})
+	check(f'the {_tool} template lists every setting in its schema',
+	      sorted(flat) == sorted(styles.BY_NAME[_tool]), True)
+	_tpl_path = Path(_TMP) / styles.STYLES_DIRNAME / _tool / 'TPL.toml'
+	_tpl_path.parent.mkdir(parents=True, exist_ok=True)
+	_tpl_path.write_text(uncommented, encoding='utf-8')
+	round_tripped = dict(_module.settings)
+	styles.apply(_tool, round_tripped, user='TPL')
+	check(f'reading the {_tool} template back reproduces the built-in values exactly',
+	      [k.name for k in styles.BY_NAME[_tool].values()
+	       if round_tripped[k.target] != _module.settings[k.target]], [])
 
 
 # ---------- Bragg legend naming ----------
