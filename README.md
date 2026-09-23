@@ -15,7 +15,7 @@ pip install ach-diffraction-suite
 | `pp` | plotter | Publication plots of a finished Pawley fit |
 | `pq` | quickplot | Quick stacked comparison of raw patterns |
 | `pt` | tables | HTML lattice-parameter tables from a batch of `.out` files |
-| `conv` | convert | Measured patterns to tab-separated `.xy`, for Origin or Excel |
+| `conv` | convert | Patterns, and CIFs simulated, to tab-separated `.xy` for Origin or Excel |
 | `achdiff` | — | Manage profiles, plot styles, config and your own command aliases |
 
 The hand-written `.cmd` shims are no longer needed — pip puts real executables on
@@ -398,10 +398,10 @@ pp -s -b 23.4,0.3 31.2,2%,lightblue # set width and colour per strip
 
 #### Keeping the command: `-d`
 
-Every tool — `pp`, `pq`, `pf`, `pt`, `rp` — takes `-d`. It writes the command
-you just ran to `run<N>.bat` in the current directory, or `run<N>_s.bat` when it
-saves its plot silently (`-s`, or `pp --gif`). Double-click it to draw the plot
-again; there is no need to keep the image.
+Every tool — `pp`, `pq`, `pf`, `pt`, `rp`, `conv` — takes `-d`. It writes the
+command you just ran to `run<N>.bat` in the current directory, or `run<N>_s.bat`
+when it saves its plot silently (`-s`, or `pp --gif`). Double-click it to draw
+the plot again; there is no need to keep the image.
 
 ```bash
 pp -s -c --qall -m 20,40,10 -d      # plot, and write run1_s.bat
@@ -454,6 +454,9 @@ achdiff flags clear -u CN pp
 - They are checked with the tool's own parser when you set them, so a typo is
   refused then, not on every run afterwards. `-u` can't be a default (it picks
   the profile the defaults come from), and must come before the tool name.
+- Nor can `conv -f`: overwriting files has to be typed on the run that means
+  it. One already in a config — edited in by hand, or saved by 0.15.0 — is
+  ignored along with the rest of that tool's defaults, and the run says so.
 - A profile's own list replaces `--global`'s rather than adding to it;
   `achdiff flags set -u CN pq` with nothing after it opts CN out entirely.
 - `qall = true` from before still works, and counts as a default `--qall`.
@@ -661,29 +664,39 @@ checked against a reference.
 RAW2/RAW3 and the old DIFFRAC-AT formats are not covered and still need PowDLL
 or TOPAS; they raise a message saying so rather than plotting nonsense.
 
-### `conv` — measured patterns to `.xy`
+### `conv` — patterns to `.xy`
 
 For plotting in Origin, Excel or anything else that wants plain columns:
 
 ```bash
-conv                          # every .brml, .raw and .dat in this folder
+conv                          # every .brml, .raw, .dat and .cif in this folder
 conv -i *.raw                 # just these; the wildcard works in cmd too
 conv -i a.brml b.dat -o xy    # into a subfolder
+conv -i ZIF-4 -g 3,60,0.01    # a CIF from your library, on a finer grid
 ```
 
 Each file becomes `<name>.xy`: 2θ, a tab, the intensity, one point per line, no
 header. The tab is what makes Excel and Origin split a pasted block into two
-columns; TOPAS and `pq` read it like any other whitespace. The numbers are the
-ones `pq` plots — both read through the same code — with at most six decimals,
-so `3.0205` rather than `3.0205000000000002`.
+columns; TOPAS and `pq` read it like any other whitespace. For a measured file
+the numbers are the ones `pq` plots — both read through the same code — with at
+most six decimals, so `3.0205` rather than `3.0205000000000002`.
+
+A **CIF** is simulated the way `pq` simulates one: Cu Kα1, each reflection a
+Lorentzian of 0.1° FWHM, scaled to a maximum of 1. The grid is 5–50° 2θ in steps
+of 0.02° unless `-g START,STOP,STEP` says otherwise, and an empty slot keeps its
+default as in `-m`: `-g ,60,` runs to 60°. A CIF that is not in the folder is
+looked for in your CIF library, as with `pq -i`. When a file has no displacement
+parameters, the run says the high-angle intensities are overestimated — nothing
+in the `.xy` would.
 
 - An existing `.xy` is left alone, and the run says so; `-f` overwrites it. It
-  may be an export from another program, and the only copy.
+  may be an export from another program, and the only copy. `-f` has to be
+  typed each time: it cannot be one of your default flags.
 - When two files share a name (`a.brml`, `a.raw`), the `.brml` is converted,
-  then the `.raw`, then the `.dat` — whose header rounds 2θ to three decimals.
+  then the `.raw`, then the `.dat` — whose header rounds 2θ to three decimals —
+  and a CIF last: a measurement always wins over a simulation of the same name.
 - `.xy`, `.txt` and `.csv` are converted only when named with `-i`: a fit folder
-  is full of `.txt` that are not patterns. CIFs and PDF cards are simulations,
-  not measurements, and are refused.
+  is full of `.txt` that are not patterns. PDF cards are not read.
 - The `.xy` files land beside the originals, so a bare `pq` in the same folder
   draws each pattern twice. `-o xy` keeps them apart.
 
@@ -759,7 +772,7 @@ src/achdiff/
 ├── document.py          # -d: the command, kept as run<N>.bat
 ├── core/
 │   ├── rounding.py      # crystallographic rounding (one copy)
-│   ├── cif.py           # CIF resolution + reflection simulation
+│   ├── cif.py           # CIF resolution, reflection + pattern simulation
 │   ├── readers.py       # measured patterns: pq, pf and conv read here
 │   ├── overlays.py      # -m and -b, shared by pp and pq
 │   ├── animate.py       # GIFs of a sequential run

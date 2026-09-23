@@ -1,10 +1,11 @@
-"""Assertions for conv, and for the readers it shares with pq and pf.
+"""Assertions for conv, and for the readers and CIF simulation it shares with pq.
 
 Run: python tests/test_convert.py
 Uses ACH_CONFIG_DIR to redirect config into a temp dir, and converts copies of
 the example files in another, so a test run touches nothing real.
 """
 
+import argparse
 import contextlib
 import io
 import os
@@ -18,19 +19,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 _TMP = tempfile.mkdtemp()
 os.environ['ACH_CONFIG_DIR'] = _TMP
 os.environ['MPLBACKEND'] = 'Agg'
-for _v in ('ACH_USER',):
+for _v in ('ACH_USER', 'CIF_LOC'):
 	os.environ.pop(_v, None)
 
 import numpy as np  # noqa: E402
 
-from achdiff import cli, cmdline  # noqa: E402
-from achdiff.core import readers  # noqa: E402
+from achdiff import cli, cmdline, config  # noqa: E402
+from achdiff.core import cif as cifcore, readers  # noqa: E402
 from achdiff.tools import convert, prefit, quickplot  # noqa: E402
 
 EXAMPLES = Path(__file__).resolve().parents[1] / 'examples'
 BRML = 'sample-A-P4-cryst.brml'
 DAT = 'sample-B-F-0.20-dry.dat'
 XY = 'sample-C_300_001_00000.xy'
+CIF = 'H2bdc.cif'
 
 fails = []
 
@@ -141,9 +143,68 @@ code, out = run('-i', 'bad.dat', DAT, '-o', 'xy2')
 check('an unreadable file fails, the rest are still converted',
       (code, [p.name for p in (d / 'xy2').glob('*')]), (1, ['sample-B-F-0.20-dry.xy']))
 
-(d / 'H2bdc.cif').write_text('data_x\n', encoding='utf-8')
-code, out = run('-i', 'H2bdc.cif')
-check('a CIF is not a measured pattern', ('not a measured pattern' in out, code), (True, 1))
+shutil.copy(EXAMPLES / 'example-pdf-card.xml', d / 'card.xml')
+code, out = run('-i', 'card.xml')
+check('a PDF card is not something conv reads, and converting nothing is exit 1',
+      ('not a pattern conv can read' in out, code), (True, 1))
+
+
+# ---------- CIFs, simulated ----------
+def columns(path):
+	rows = [line.split('\t') for line in Path(path).read_text(encoding='utf-8').splitlines()]
+	return [r[0] for r in rows], np.array([float(r[1]) for r in rows])
+
+
+d = workdir(CIF, DAT)
+code, out = run()
+xs, ys = columns('H2bdc.xy')
+check('with no -i, a CIF here is simulated too', (code, 'simulated' in out), (0, True))
+check('...on 5 to 50 in steps of 0.02 by default', (len(xs), xs[0], xs[1], xs[-1]),
+      (2251, '5', '5.02', '50'))
+_x = convert.grid(*convert.DEFAULT_GRID)
+_y, _n, _note = cifcore.simulate(CIF, _x)
+check('...as core.cif simulates it, scaled to a maximum of 1',
+      (bool(np.allclose(ys, _y, rtol=0, atol=1e-6)), float(ys.max())), (True, 1.0))
+check('...and a note on the intensities is passed on', _note != '' and _note in out, True)
+
+code, out = run('-i', CIF, '-g', '3,60,0.01', '-o', 'fine')
+xs, _ = columns(d / 'fine' / 'H2bdc.xy')
+check('-g START,STOP,STEP sets the grid', (len(xs), xs[0], xs[-1]), (5701, '3', '60'))
+code, out = run('-i', CIF, '-g', ',60,', '-o', 'wide')
+xs, _ = columns(d / 'wide' / 'H2bdc.xy')
+check('an empty slot in -g keeps its default', (xs[0], xs[1], xs[-1]), ('5', '5.02', '60'))
+
+check('a grid that does not divide evenly stops short of STOP, never past it',
+      float(convert.grid(5, 50, 0.07)[-1]) <= 50, True)
+for bad in ('5,50', '5,50,0,02', '50,5,0.02', '5,50,0', '5,50,x', '5,50,90', '5,200,1', '5,50,0.00001'):
+	try:
+		convert.grid_spec(bad)
+		_ok = False
+	except argparse.ArgumentTypeError:
+		_ok = True
+	check(f'-g {bad} is refused with a reason', _ok, True)
+check('a stored default -g is checked when it is set',
+      (cmdline.check_defaults('conv', ['-g', '3,60,0.01']), cmdline.check_defaults('conv', ['-g', '5,50']) is None),
+      (None, False))
+
+code, out = run('-i', CIF, '-g', '1,2,0.01', '-o', 'none')
+check('no reflections on the grid is a failure, not a flat file',
+      (code, 'no reflections' in out, (d / 'none' / 'H2bdc.xy').exists()), (1, True, False))
+
+d = workdir(DAT)
+shutil.copy(EXAMPLES / CIF, d / 'sample-B-F-0.20-dry.cif')
+code, out = run()
+check('a measured pattern wins over a CIF of the same name',
+      'just written from sample-B-F-0.20-dry.dat' in out, True)
+
+_lib = Path(tempfile.mkdtemp())
+shutil.copy(EXAMPLES / CIF, _lib / CIF)
+os.environ['CIF_LOC'] = str(_lib)
+d = workdir()
+code, out = run('-i', 'H2bdc')
+check('-i finds a CIF in the CIF library, as pq -i does, and writes it here',
+      (code, (d / 'H2bdc.xy').is_file()), (0, True))
+del os.environ['CIF_LOC']
 
 
 # ---------- one of the tools ----------
@@ -152,7 +213,7 @@ check('conv is a tool: default flags and -d work for it',
 check('...and an alias can run it', (cli.TOOLS.get('convert'), cli.BUILTIN_COMMANDS.get('conv')),
       ('achdiff.tools.convert', 'convert'))
 check('default flags are checked by conv\'s own parser',
-      (cmdline.check_defaults('conv', ['-f', '-o', 'xy']), cmdline.check_defaults('conv', ['-s']) is None),
+      (cmdline.check_defaults('conv', ['-v', '-o', 'xy']), cmdline.check_defaults('conv', ['-s']) is None),
       (None, False))
 
 d = workdir(DAT)
@@ -160,6 +221,38 @@ code, out = run('-d', '-o', 'xy')
 record = next(d.glob('run*.bat'), None)
 text = record.read_text(encoding='utf-8') if record else ''
 check('-d records the run', (record is not None, '-o xy --no-defaults' in text), (True, True))
+
+
+# ---------- -f has to be typed ----------
+check('-f cannot be stored as a default flag',
+      [(cmdline.check_defaults('conv', f) or '').startswith('-f cannot')
+       for f in (['-f'], ['--force'], ['-vf'], ['-o', 'xy', '-f'])],
+      [True] * 4)
+
+d = workdir(DAT)
+(d / 'sample-B-F-0.20-dry.xy').write_text('keep me\n', encoding='utf-8')
+# As a config edited by hand, or saved by 0.15.0, would have it.
+config.save_default_flags('conv', ['-f', '-v'])
+code, out = run()
+check('a -f already in the config is ignored, with the rest of those defaults',
+      ((d / 'sample-B-F-0.20-dry.xy').read_text(encoding='utf-8'), 'Ignoring the default conv flags' in out),
+      ('keep me\n', True))
+code, out = run('-f')
+check('...while a typed -f still overwrites',
+      (d / 'sample-B-F-0.20-dry.xy').read_text(encoding='utf-8')[:1], '5')
+config.save_default_flags('conv', None)
+
+_target = d / 'raced.xy'
+_target.write_text('keep me\n', encoding='utf-8')
+try:
+	convert.write_xy(_target, [1.0], [2.0])
+	_raised = False
+except FileExistsError:
+	_raised = True
+check('the write itself refuses an existing file without -f, whatever checked before it',
+      (_raised, _target.read_text(encoding='utf-8')), (True, 'keep me\n'))
+convert.write_xy(_target, [1.0], [2.0], overwrite=True)
+check('...and replaces it with -f', _target.read_text(encoding='utf-8'), '1\t2\n')
 
 
 print()

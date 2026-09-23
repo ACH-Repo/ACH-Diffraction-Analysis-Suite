@@ -52,8 +52,10 @@ SETTING_FLAGS = {'pp': {'qall': '--qall'}}
 NO_DEFAULTS = '--no-defaults'
 
 # Flags that make no sense as a default: which profile to use cannot come from
-# the profile, and --save-profile would rewrite it on every run.
-_NOT_DEFAULTABLE = {'user', 'save_profile', 'no_defaults'}
+# the profile, and --save-profile would rewrite it on every run. --force (conv
+# -f) replaces files; stored, it would do so on every run of everyone the
+# defaults reach, without anyone having asked. Overwriting is typed or not done.
+_NOT_DEFAULTABLE = {'user', 'save_profile', 'no_defaults', 'force'}
 
 
 def add_arguments(parser):
@@ -131,7 +133,11 @@ def check_defaults(tool, flags):
 
 	Parsed with the tool's own parser, so a typo is caught when it is stored
 	rather than on every run afterwards."""
-	parser = build_parser(tool)
+	return _defaults_problem(build_parser(tool), tool, flags)
+
+
+def _defaults_problem(parser, tool, flags):
+	"""check_defaults, with the parser already built."""
 	parsed, problem = _try_parse(parser, list(flags))
 	if parsed is None:
 		return problem
@@ -140,6 +146,9 @@ def check_defaults(tool, flags):
 	if 'user' in changed:
 		return ('-u cannot be a default -- it picks the profile the defaults come '
 		        'from. Put it before the tool name: achdiff flags set -u CN ' + tool + ' ...')
+	if 'force' in changed:
+		return ('-f cannot be a default -- it overwrites files, so it has to be typed '
+		        'on the run that means to')
 	bad = sorted(changed & _NOT_DEFAULTABLE)
 	if bad:
 		return 'not usable as a default: ' + ', '.join('--' + b.replace('_', '-') for b in bad)
@@ -167,7 +176,11 @@ def parse_args(parser, tool, module, argv=None, silent=None):
 		flags, source = default_flags(tool, user)
 		if flags:
 			combined, dropped = merge(parser, flags, typed)
-			parsed, problem = _try_parse(parser, combined)
+			# Checked here as well as when stored: a config edited by hand, or
+			# saved before a flag became undefaultable, must not slip one in.
+			parsed, problem = None, _defaults_problem(parser, tool, flags)
+			if problem is None:
+				parsed, problem = _try_parse(parser, combined)
 			if parsed is None:
 				# Stored before an upgrade renamed something, most likely. The run
 				# goes ahead on what was typed; the defaults are for convenience.

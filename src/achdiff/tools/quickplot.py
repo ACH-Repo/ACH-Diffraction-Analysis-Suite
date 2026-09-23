@@ -189,28 +189,12 @@ def read_cif(path, two_theta_range=None):
 	                                            settings['cif_wavelength'])
 
 	fwhm = float(getattr(args, 'broadening', settings['broadening']))
-	half = fwhm / 2.0
-	half_sq = half * half
 
 	# Build the evaluation grid on the exact range; step finely enough that
 	# the Lorentzian core (~10 samples across the FWHM) renders smoothly.
 	step = max(fwhm / 10.0, 0.001)
 	x = np.arange(x_lo, x_hi + step, step)
-
-	if positions.size == 0:
-		return x, np.zeros_like(x)
-
-	# Sum of Lorentzians. L_i(x) = I_i * (γ/2)² / ((x − x0_i)² + (γ/2)²)
-	# Peak value of one term is I_i (at x = x0_i); summing keeps relative
-	# intensities intact and we normalise to [0, 1] at the end.
-	y = np.zeros_like(x)
-	for pos, I in zip(positions, intensities):
-		y += I * half_sq / ((x - pos) ** 2 + half_sq)
-
-	ymax = y.max()
-	if ymax > 0:
-		y = y / ymax
-	return x, y
+	return x, cifcore.broaden(positions, intensities, x, fwhm)
 
 
 def read_pdf_xml(path, two_theta_range=None):
@@ -276,18 +260,12 @@ def read_pdf_xml(path, two_theta_range=None):
 	x_lo, x_hi = float(two_theta_range[0]), float(two_theta_range[1])
 
 	fwhm = float(getattr(args, 'broadening', settings['broadening']))
-	half_sq = (fwhm / 2.0) ** 2
 	step = max(fwhm / 10.0, 0.001)
 	x = np.arange(x_lo, x_hi + step, step)
 
-	# Sum of Lorentzians, normalised to [0, 1]. Naturally ~0 (flat) away from the
-	# measured reflections, which is exactly the region we want dashed.
-	y = np.zeros_like(x)
-	for pos, I in zip(positions, intensities):
-		y += I * half_sq / ((x - pos) ** 2 + half_sq)
-	ymax = y.max()
-	if ymax > 0:
-		y = y / ymax
+	# Normalised to [0, 1], and naturally ~0 (flat) away from the measured
+	# reflections, which is exactly the region drawn dashed.
+	y = cifcore.broaden(positions, intensities, x, fwhm)
 
 	tol = settings['pdf_xml_solid_tol_fwhm'] * fwhm
 	solid_range = (meas_lo - tol, meas_hi + tol)

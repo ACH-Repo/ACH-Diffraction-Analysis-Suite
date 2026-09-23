@@ -50,6 +50,8 @@ from ._molom import spacegroups as _spacegroups
 
 DEFAULT_N_TOP = 10
 DEFAULT_WAVELENGTH = 1.54060  # Cu K-alpha1
+#: Lorentzian FWHM, degrees 2theta, a simulated pattern is drawn with.
+DEFAULT_FWHM = 0.1
 
 #: Parameter names in the order every tool spells a cell.
 CELL_KEYS = ('a', 'b', 'c', 'alpha', 'beta', 'gamma')
@@ -346,6 +348,38 @@ def load_phase(cif_path, announce=True):
 		for note in phase.notes:
 			print(f'[!] {os.path.basename(path)}: {note}')
 	return phase
+
+
+def broaden(positions, intensities, x, fwhm=DEFAULT_FWHM):
+	"""Reflections as a sum of Lorentzians of FWHM `fwhm`, on the grid `x`,
+	scaled so the tallest point is 1. All zeros when there are none.
+
+	Each term peaks at its own intensity, so the sum keeps the relative
+	intensities. Shared by pq's CIF and PDF-card patterns and by conv."""
+	x = np.asarray(x, dtype=float)
+	half = fwhm / 2.0
+	half_sq = half * half
+	y = np.zeros_like(x)
+	for pos, intensity in zip(positions, intensities):
+		y += intensity * half_sq / ((x - pos) ** 2 + half_sq)
+	top = y.max() if y.size else 0.0
+	return y / top if top > 0 else y
+
+
+def simulate(cif_path, x, wavelength=DEFAULT_WAVELENGTH, fwhm=DEFAULT_FWHM):
+	"""A CIF's powder pattern on the 2theta grid `x`: every reflection between
+	the grid's ends, broadened.
+
+	Returns (y, number of reflections, note). The note is whatever qualifies
+	the intensities -- no displacement parameters in the file, an element with
+	no scattering factor -- or ''. Raises CifError for a file that will not
+	read."""
+	x = np.asarray(x, dtype=float)
+	pattern = load_phase(cif_path, announce=False).pattern((x[0], x[-1]), wavelength)
+	reflections = sorted(pattern.reflections, key=lambda r: r.two_theta)
+	y = broaden([r.two_theta for r in reflections],
+	            [r.intensity for r in reflections], x, fwhm)
+	return y, len(reflections), pattern.note
 
 
 def parse_reflections(spec, default_n_top=DEFAULT_N_TOP):
