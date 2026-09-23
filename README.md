@@ -1,8 +1,8 @@
 # ACH Diffraction Analysis Suite
 
 PXRD and TOPAS analysis tools for the lab: Pawley fit setup, cell-parameter
-prefitting, publication plotting, quick pattern comparison, and lattice-parameter
-tables. Five commands, one install.
+prefitting, publication plotting, quick pattern comparison, lattice-parameter
+tables, and conversion to plain `.xy`. Six commands, one install.
 
 ```bash
 pip install ach-diffraction-suite
@@ -15,6 +15,7 @@ pip install ach-diffraction-suite
 | `pp` | plotter | Publication plots of a finished Pawley fit |
 | `pq` | quickplot | Quick stacked comparison of raw patterns |
 | `pt` | tables | HTML lattice-parameter tables from a batch of `.out` files |
+| `conv` | convert | Measured patterns to tab-separated `.xy`, for Origin or Excel |
 | `achdiff` | — | Manage profiles, plot styles, config and your own command aliases |
 
 The hand-written `.cmd` shims are no longer needed — pip puts real executables on
@@ -30,13 +31,13 @@ If you prefer different names, see [Custom command names](#custom-command-names)
 pip install --upgrade ach-diffraction-suite
 ```
 
-One command updates all five tools. Your configuration is **not** touched: it
+One command updates all six tools. Your configuration is **not** touched: it
 lives in the user config directory, outside the installed package, so an upgrade
 structurally cannot overwrite it.
 
 ## Custom command names
 
-The five commands above are pip *entry points*: pip writes real executables into
+The six commands above are pip *entry points*: pip writes real executables into
 the environment's Scripts directory when the package is installed. Nothing in a
 config file can rename them afterwards, because your shell needs an actual file
 on `PATH` to find.
@@ -52,7 +53,7 @@ achdiff alias remove plot
 ```
 
 Tool names for the second argument: `plotter`, `wizard`, `prefit`, `tables`,
-`quickplot`.
+`quickplot`, `convert`.
 
 Aliases are recorded in your config, so they survive upgrades. A reinstall can
 clear the Scripts directory though — `achdiff alias sync` recreates them all.
@@ -660,6 +661,32 @@ checked against a reference.
 RAW2/RAW3 and the old DIFFRAC-AT formats are not covered and still need PowDLL
 or TOPAS; they raise a message saying so rather than plotting nonsense.
 
+### `conv` — measured patterns to `.xy`
+
+For plotting in Origin, Excel or anything else that wants plain columns:
+
+```bash
+conv                          # every .brml, .raw and .dat in this folder
+conv -i *.raw                 # just these; the wildcard works in cmd too
+conv -i a.brml b.dat -o xy    # into a subfolder
+```
+
+Each file becomes `<name>.xy`: 2θ, a tab, the intensity, one point per line, no
+header. The tab is what makes Excel and Origin split a pasted block into two
+columns; TOPAS and `pq` read it like any other whitespace. The numbers are the
+ones `pq` plots — both read through the same code — with at most six decimals,
+so `3.0205` rather than `3.0205000000000002`.
+
+- An existing `.xy` is left alone, and the run says so; `-f` overwrites it. It
+  may be an export from another program, and the only copy.
+- When two files share a name (`a.brml`, `a.raw`), the `.brml` is converted,
+  then the `.raw`, then the `.dat` — whose header rounds 2θ to three decimals.
+- `.xy`, `.txt` and `.csv` are converted only when named with `-i`: a fit folder
+  is full of `.txt` that are not patterns. CIFs and PDF cards are simulations,
+  not measurements, and are refused.
+- The `.xy` files land beside the originals, so a bare `pq` in the same folder
+  draws each pattern twice. `-o xy` keeps them apart.
+
 ### `pt` — lattice-parameter tables
 
 Interactive selection of `.out` files, producing an HTML table of refined cell
@@ -733,6 +760,7 @@ src/achdiff/
 ├── core/
 │   ├── rounding.py      # crystallographic rounding (one copy)
 │   ├── cif.py           # CIF resolution + reflection simulation
+│   ├── readers.py       # measured patterns: pq, pf and conv read here
 │   ├── overlays.py      # -m and -b, shared by pp and pq
 │   ├── animate.py       # GIFs of a sequential run
 │   └── _molom/          # vendored MoloM crystallography (do not edit)

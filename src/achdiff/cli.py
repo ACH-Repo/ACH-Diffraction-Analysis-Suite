@@ -2,7 +2,7 @@
 
 Why aliases need a command at all
 ---------------------------------
-The five short commands (pp, rp, pf, pt, pq) are pip *entry points*: pip writes a
+The short commands (pp, rp, pf, pt, pq, conv) are pip *entry points*: pip writes a
 real executable into the environment's Scripts directory at install time. Nothing
 in a config file can rename them afterwards, because the shell needs an actual
 file on PATH to find.
@@ -33,6 +33,7 @@ TOOLS = {
 	'prefit':    'achdiff.tools.prefit',
 	'tables':    'achdiff.tools.tables',
 	'quickplot': 'achdiff.tools.quickplot',
+	'convert':   'achdiff.tools.convert',
 }
 
 # Default entry points, shown by `achdiff alias list` for context.
@@ -42,6 +43,7 @@ BUILTIN_COMMANDS = {
 	'pf': 'prefit',
 	'pt': 'tables',
 	'pq': 'quickplot',
+	'conv': 'convert',
 }
 
 RESERVED = set(BUILTIN_COMMANDS) | {'achdiff'}
@@ -747,12 +749,13 @@ def cmd_flags_show(args):
 	user, source = identity.resolve(args.user)
 	print(identity.describe(user, source))
 	print()
+	width = max(len(t) for t in cmdline.TOOL_MODULES)
 	for tool in cmdline.TOOL_MODULES:
 		flags, where = cmdline.default_flags(tool, user)
 		if flags:
-			print(f'  {tool}  {" ".join(flags):<40} ({where})')
+			print(f'  {tool:<{width}}  {" ".join(flags):<40} ({where})')
 		else:
-			print(f'  {tool}  (none)')
+			print(f'  {tool:<{width}}  (none)')
 	print()
 	print('Set with e.g.  achdiff flags set -u CN pp -d -c')
 	print('Skip for one run with --no-defaults.')
@@ -953,7 +956,7 @@ def _build_parser():
 		p.add_argument('--global', dest='is_global', action='store_true',
 		               help='The [defaults] everyone without their own falls back to.')
 		p.add_argument('tool', choices=list(cmdline.TOOL_MODULES), metavar='TOOL',
-		               help='pp, pq, pf, pt or rp.')
+		               help='pp, pq, pf, pt, rp or conv.')
 		return p
 
 	f_show = fl_sub.add_parser('show', help="Show each tool's default flags.")

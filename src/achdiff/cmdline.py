@@ -1,7 +1,7 @@
 """A tool's command line: the profile's default flags in front, and -d behind.
 
 Every tool parses through `parse_args` here, so default flags and the -d record
-behave the same in all five.
+behave the same in all of them.
 
 Default flags
 -------------
@@ -43,6 +43,7 @@ TOOL_MODULES = {
 	'pf': 'achdiff.tools.prefit',
 	'pt': 'achdiff.tools.tables',
 	'rp': 'achdiff.tools.wizard',
+	'conv': 'achdiff.tools.convert',
 }
 
 # Profile settings that are a flag's default in all but name.

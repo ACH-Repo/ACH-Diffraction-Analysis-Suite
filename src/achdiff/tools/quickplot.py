@@ -9,7 +9,6 @@ import os
 import sys
 import pathlib
 import argparse
-import zipfile
 from glob import glob
 from pathlib import Path
 
@@ -21,7 +20,7 @@ from matplotlib.transforms import blended_transform_factory
 
 from .. import cmdline, config, identity, styles
 from ..core import cif as cifcore
-from ..core import bruker, overlays
+from ..core import overlays, readers
 from ..progname import prog_name
 
 
@@ -163,56 +162,15 @@ def vprint(*a, **kw):
 # FILE READERS
 # ==========================================
 
-def read_xy(path):
-	"""Generic whitespace-separated x,y reader. Lines starting with '#' are skipped.
-
-	Tolerant: rejects ragged or single-column rows with a clear error message so
-	the main loop can skip the file instead of crashing on a numpy shape error."""
-	with open(path) as inf:
-		rows = [line.split() for line in inf.read().strip().split('\n')
-		        if line.strip() and not line.startswith('#')]
-	if not rows:
-		raise ValueError(f'{path}: no data rows.')
-	ncols = {len(r) for r in rows}
-	if len(ncols) > 1:
-		raise ValueError(f'{path}: inconsistent column counts {sorted(ncols)}.')
-	if next(iter(ncols)) < 2:
-		raise ValueError(f'{path}: need at least 2 columns, got {next(iter(ncols))}.')
-	# Only use the first two columns; extras (e.g. error columns) are ignored.
-	arr = np.array([r[:2] for r in rows], dtype=float)
-	return arr[:, 0], arr[:, 1]
-
+# The measured formats are read by core.readers, which pf and conv share, so the
+# pattern conv writes out is the one drawn here. Only the simulations are pq's.
 
 def read_raw(path):
-	"""Bruker .raw (RAW1.01 or RAW4.00) read natively -- see ``core.bruker``.
-
-	Previously this shelled out to TOPAS7 tc.exe to convert the file to .xy,
-	which made plotting depend on a licensed local install. The native reader
-	is byte-for-byte equivalent (verified against PowDLL's RIET7 export)."""
-	return bruker.read_raw(path, verbose=args.verbose)
+	return readers.read_raw(path, verbose=args.verbose)
 
 
-def read_brml(path):
-	"""Extract a 2θ/intensity scan from a Bruker .brml archive.
-
-	Each <Datum> row is `timePerStep,1,2theta,theta,intensity`. We only need
-	columns 2 (2θ) and 4 (intensity)."""
-	with zipfile.ZipFile(path, 'r') as z:
-		# Find the first RawDataN.xml; most .brml files have RawData0.xml.
-		raw_name = next((n for n in z.namelist()
-		                 if re.match(r'Experiment0/RawData\d+\.xml$', n)), None)
-		if raw_name is None:
-			raise ValueError(f'No RawDataN.xml found inside {path}')
-		with z.open(raw_name) as f:
-			xml = f.read().decode('utf-8')
-
-	rows = re.findall(r'<Datum>([^<]+)</Datum>', xml)
-	if not rows:
-		raise ValueError(f'No <Datum> rows found in {path}')
-
-	data = np.array([r.split(',') for r in rows], dtype=float)
-	# columns: timePerStep, _, 2theta, theta, intensity
-	return data[:, 2], data[:, 4]
+def read_dat(path):
+	return readers.read_dat(path, verbose=args.verbose)
 
 
 def read_cif(path, two_theta_range=None):
@@ -336,52 +294,12 @@ def read_pdf_xml(path, two_theta_range=None):
 	return x, y, solid_range
 
 
-def read_Riet7(path):
-	"""Riet7 .dat: header has '<start> <step> <stop> MeasureDateTime ...',
-	followed by an integer intensity block."""
-	with open(path, encoding='utf-8', errors='replace') as inf:
-		filestring = inf.read()
-
-	header_re = re.compile(r'(\d+[.,]\d+)\s+(\d+[.,]\d+)\s+(\d+[.,]\d+)\s+[Mm]easureDateTime')
-	m = header_re.search(filestring)
-	if m is None:
-		raise ValueError(f'Could not find Riet7 header (start/step/stop  MeasureDateTime) in {path}')
-
-	start, step, stop = (float(g.replace(',', '.')) for g in m.groups())
-
-	# Intensities live after the header line. Skip past the newline that
-	# terminates the MeasureDateTime line — otherwise the trailing date/time
-	# digits (e.g. "21/05/2024 03:45") get picked up as the first intensities
-	# and produce a spurious spike at the start of the pattern.
-	nl = filestring.find('\n', m.end())
-	tail = filestring[nl + 1:] if nl != -1 else filestring[m.end():]
-	intensities = np.array(re.findall(r'-?\d+', tail), dtype=float)
-
-	# Expected count from the header. Trim or pad as needed.
-	n_expected = int(round((stop - start) / step)) + 1
-	if intensities.size < n_expected:
-		raise ValueError(f'{path}: expected {n_expected} intensities, found {intensities.size}')
-	intensities = intensities[:n_expected]
-
-	x = start + np.arange(n_expected) * step
-	return x, intensities
-
-
-def read_dat(path):
-	"""Dispatcher for .dat: try Riet7 first, fall back to generic x,y."""
-	try:
-		return read_Riet7(path)
-	except Exception as e:
-		vprint(f'  .dat: Riet7 parse failed ({e}); falling back to read_xy.')
-		return read_xy(path)
-
-
 READERS = {
-	'xy':   read_xy,
-	'txt':  read_xy,
-	'csv':  read_xy,
+	'xy':   readers.read_xy,
+	'txt':  readers.read_xy,
+	'csv':  readers.read_xy,
 	'raw':  read_raw,
-	'brml': read_brml,
+	'brml': readers.read_brml,
 	'cif':  read_cif,
 	'dat':  read_dat,
 }

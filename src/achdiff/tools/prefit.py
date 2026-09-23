@@ -22,10 +22,8 @@ If --exp or --cif is omitted, a file dialog opens for the missing ones.
 """
 
 import os
-import re
 import sys
 import argparse
-import zipfile
 from glob import glob
 from pathlib import Path
 
@@ -46,7 +44,7 @@ except ImportError:
 	find_peaks = None
 
 from .. import cmdline, config, identity
-from ..core import bruker
+from ..core import readers
 from ..core import cif as cifcore
 from ..progname import prog_name
 
@@ -121,87 +119,11 @@ ANGLE_PARAMS = ('alpha', 'beta', 'gamma')
 
 
 # ==========================================
-# READERS  (duplicated from PXRD_Plotter so importing isn't required)
+# READERS  (shared with pq and conv: core.readers)
 # ==========================================
 
-def read_xy(path):
-	with open(path) as inf:
-		rows = [line.split() for line in inf.read().strip().split('\n')
-		        if line.strip() and not line.startswith('#')]
-	if not rows:
-		raise ValueError(f'{path}: no data rows.')
-	ncols = {len(r) for r in rows}
-	if len(ncols) > 1:
-		raise ValueError(f'{path}: inconsistent column counts {sorted(ncols)}.')
-	if next(iter(ncols)) < 2:
-		raise ValueError(f'{path}: need at least 2 columns.')
-	arr = np.array([r[:2] for r in rows], dtype=float)
-	return arr[:, 0], arr[:, 1]
-
-
-def read_brml(path):
-	with zipfile.ZipFile(path, 'r') as z:
-		raw_name = next((n for n in z.namelist()
-		                 if re.match(r'Experiment0/RawData\d+\.xml$', n)), None)
-		if raw_name is None:
-			raise ValueError(f'No RawDataN.xml found inside {path}')
-		with z.open(raw_name) as f:
-			xml = f.read().decode('utf-8')
-	rows = re.findall(r'<Datum>([^<]+)</Datum>', xml)
-	if not rows:
-		raise ValueError(f'No <Datum> rows found in {path}')
-	data = np.array([r.split(',') for r in rows], dtype=float)
-	return data[:, 2], data[:, 4]
-
-
-def read_Riet7(path):
-	with open(path, encoding='utf-8', errors='replace') as inf:
-		fs = inf.read()
-	header_re = re.compile(r'(\d+[.,]\d+)\s+(\d+[.,]\d+)\s+(\d+[.,]\d+)\s+[Mm]easureDateTime')
-	m = header_re.search(fs)
-	if m is None:
-		raise ValueError(f'Could not find Riet7 header in {path}')
-	start, step, stop = (float(g.replace(',', '.')) for g in m.groups())
-	nl = fs.find('\n', m.end())
-	tail = fs[nl + 1:] if nl != -1 else fs[m.end():]
-	intensities = np.array(re.findall(r'-?\d+', tail), dtype=float)
-	n_expected = int(round((stop - start) / step)) + 1
-	if intensities.size < n_expected:
-		raise ValueError(f'{path}: expected {n_expected} intensities, found {intensities.size}')
-	intensities = intensities[:n_expected]
-	x = start + np.arange(n_expected) * step
-	return x, intensities
-
-
-def read_dat(path):
-	try:
-		return read_Riet7(path)
-	except Exception:
-		return read_xy(path)
-
-
-def read_raw(path):
-	"""Bruker .raw (RAW1.01 or RAW4.00) read natively -- see ``core.bruker``. No TOPAS
-	conversion step, so prefitting works on a machine without TOPAS."""
-	return bruker.read_raw(path)
-
-
-READERS = {
-	'xy': read_xy, 'txt': read_xy, 'csv': read_xy,
-	'dat': read_dat, 'raw': read_raw, 'brml': read_brml,
-}
-
-
 def read_experimental(path):
-	ext = Path(path).suffix.lower().lstrip('.')
-	if ext not in READERS:
-		raise ValueError(f'No reader for .{ext}: {path}')
-	x, y = READERS[ext](path)
-	x = np.asarray(x, dtype=float)
-	y = np.asarray(y, dtype=float)
-	if x.size == 0 or y.size != x.size:
-		raise ValueError(f'{path}: empty or mismatched data.')
-	return x, y
+	return readers.read(path)
 
 
 # ==========================================

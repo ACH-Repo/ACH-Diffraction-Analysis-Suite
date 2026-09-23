@@ -46,7 +46,7 @@ _CMD_SPECIAL = set(' \t"&|<>^()')
 
 
 def add_document_argument(parser):
-	"""Attach the shared -d/--document flag. -d was checked free in all five tools."""
+	"""Attach the shared -d/--document flag. -d was checked free in every tool."""
 	parser.add_argument('-d', '--document', action='store_true',
 	                    help='Also write this command to run<N>.bat in the current '
 	                         'directory (run<N>_s.bat when it saves silently), so '

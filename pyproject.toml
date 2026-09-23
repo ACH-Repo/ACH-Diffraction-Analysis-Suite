@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ach-diffraction-suite"
-version = "0.14.0"
+version = "0.15.0"
 description = "PXRD and TOPAS analysis tools: Pawley fit setup, prefitting, plotting, and lattice-parameter tables."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -76,6 +76,7 @@ rp  = "achdiff.tools.wizard:main"
 pf  = "achdiff.tools.prefit:main"
 pt  = "achdiff.tools.tables:main"
 pq  = "achdiff.tools.quickplot:main"
+conv = "achdiff.tools.convert:main"
 # Umbrella command: `achdiff alias` manages user-defined shorthands, since pip
 # entry points above are fixed at install time and cannot be renamed by a user.
 achdiff = "achdiff.cli:main"
