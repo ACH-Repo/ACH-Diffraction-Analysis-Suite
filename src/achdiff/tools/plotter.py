@@ -11,7 +11,7 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 
 from .. import cmdline, config, identity, styles
-from ..core import animate, overlays
+from ..core import animate, overlays, topas
 from ..progname import prog_name
 from ..core.rounding import cryst_round, split_value_bracket
 from ..core import cif as cifcore
@@ -648,30 +648,6 @@ def find_outfile_for_group(group_key, all_out_files=None):
 # ==========================================
 # PARSING & DATA EXTRACTION
 # ==========================================
-
-def get_substances_from_outfile(path):
-	"""Parse the wizard's `Selected phases:` audit line into an ORDERED list of
-	(substance_name, sg_token) tuples, one per phase, in declaration order.
-
-	Order and duplicates are preserved on purpose: two phases that share a space
-	group are two distinct entries here. (The previous sg-keyed dict silently
-	collapsed them, which is why same-SG fits lost a substance.) Phases are matched
-	to ticks by their ordinal position downstream, not by space group. Returns []
-	when the line is absent (e.g. a hand-written .out)."""
-	if not os.path.exists(path):
-		return []
-
-	phases = []
-	try:
-		with open(path, 'r', encoding='utf-8') as inf:
-			for line in inf:
-				if 'Selected phases:' in line:
-					phases = re.findall(r'"([^"]+)"\s*\((\d+)\)', line)
-					break  # only the first audit line is authoritative
-	except Exception as e:
-		print(f"Warning: Error encountered reading metadata from {path}: {e}")
-	return phases
-
 
 def get_outfile_info(path):
 	"""Parse the fit-quality factors TOPAS writes on one line of the .out:
@@ -1755,7 +1731,9 @@ def main():
 		outfile_path = find_outfile_for_group(group_name, all_out_files) or ''
 		outfile_info       = get_outfile_info(outfile_path)
 		phases_cell_info   = get_unit_cell_info(outfile_path)         # [(sg_raw, cell_data), ...] in phase order
-		ordered_substances = get_substances_from_outfile(outfile_path)  # [(name, sg), ...] in phase order
+		# rp's `Selected phases:` line as [(name, sg), ...] in phase order. A list, not
+		# an sg-keyed dict: two phases sharing a space group are two entries.
+		ordered_substances = topas.phase_names(outfile_path)
 
 		# Per-phase space group, indexed by phase ordinal. A phase is identified by its
 		# position in the .out (1st hkl_Is block, 2nd, ...) — never by its space group,

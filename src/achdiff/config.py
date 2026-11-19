@@ -42,6 +42,7 @@ CONFIG_FILENAME = 'config.toml'
 ENV_OVERRIDES = {
 	'cif_loc': 'CIF_LOC',
 	'topas_exe': 'TOPAS_EXE',
+	'misc_dir': 'ACH_MISC_DIR',
 }
 
 # Built-in fallbacks, used when nothing else supplies a value.
@@ -52,6 +53,9 @@ BUILTIN_DEFAULTS = {
 	# same problem cif_loc had, so it gets the same treatment.
 	'topas_exe': r'C:\TOPAS7\tc.exe',
 	'qall': False,
+	# A folder of the lab's own misc scripts, beside the ones the package ships.
+	# Empty means none; see achdiff/misc/__init__.py.
+	'misc_dir': '',
 }
 
 

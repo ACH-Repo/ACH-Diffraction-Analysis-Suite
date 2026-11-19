@@ -16,7 +16,7 @@ pip install ach-diffraction-suite
 | `pq` | quickplot | Quick stacked comparison of raw patterns |
 | `pt` | tables | HTML lattice-parameter tables from a batch of `.out` files |
 | `conv` | convert | Patterns, and CIFs simulated, to tab-separated `.xy` for Origin or Excel |
-| `achdiff` | — | Manage profiles, plot styles, config and your own command aliases |
+| `achdiff` | — | Profiles, plot styles, default flags, aliases, and the misc scripts |
 
 The hand-written `.cmd` shims are no longer needed — pip puts real executables on
 `PATH`. Delete the old shims to avoid them shadowing the installed commands.
@@ -29,6 +29,13 @@ If you prefer different names, see [Custom command names](#custom-command-names)
 
 ```bash
 pip install --upgrade ach-diffraction-suite
+```
+
+PyPI is updated less often than GitHub. For the latest version straight from
+GitHub — plain pip, no git needed:
+
+```bash
+pip install --upgrade https://github.com/ACH-Repo/ACH-Diffraction-Analysis-Suite/archive/refs/heads/main.zip
 ```
 
 One command updates all six tools. Your configuration is **not** touched: it
@@ -730,6 +737,132 @@ the first run (~19 ms thereafter). The cache key is a hash of the file's
 contents, so editing `resource.htm` invalidates it automatically — there is no
 regeneration step to forget. `ACH_CACHE_DIR` relocates the cache.
 
+## Misc scripts
+
+Some analyses are too specific to be a tool — one comparison for one paper, one
+figure for one talk — but come back a year later as *"we did this before, do we
+still have it?"*. They are kept here:
+
+```bash
+achdiff misc                          # what there is, and what each was for
+achdiff misc show cell_drift          # what one does, in full
+achdiff misc run cell_drift           # run it; with no arguments it asks
+achdiff misc copy cell_drift          # a copy in this folder, to edit by hand
+```
+
+Two ship with the package: [`cell_drift`](#cell_drift--mixture-fits-against-pure-phase-fits)
+compares mixture fits with pure-phase fits, and [`heatmap`](#heatmap--a-pattern-series-as-a-heat-map)
+draws a pressure or temperature series as a heat map.
+
+Run with no arguments, a script explains itself and asks for what it needs —
+suggesting answers from the files in the folder — then prints the command that
+would have skipped the questions. `-d` records that command like any tool's.
+
+```
+Which are the single-phase (pure) fits? [2]
+Which are the mixture fits? [1]
+Save the figure and a CSV instead of opening a window? (y/N) y
+
+[*] Next time, skip the questions:
+      achdiff misc run cell_drift --pure sample-B-cryst.out --mix sample-A-cryst.out -s
+```
+
+**`achdiff misc copy`** puts the script in the working folder. Edit it freely and
+run it with `python cell_drift.py`; it keeps working there, and on any machine
+with the suite installed, because a misc script imports from the suite only
+through `achdiff.misc.kit` — a short list of names the suite promises to keep —
+and only absolutely.
+
+**A lab folder.** Scripts ship with the package, and a lab can keep its own
+beside them without waiting for a release:
+
+```bash
+achdiff profile set --global misc_dir="D:\Workfolder\Shared\misc"
+```
+
+Any `.py` file there with a docstring and a `main()` is listed and runnable; one
+with a packaged script's name replaces it. The first line of the docstring is
+what `achdiff misc` lists, and an optional `ABOUT = {'for': ..., 'author': ...,
+'written': ...}` says what it was written for — which is what someone searching
+for "the thing we did for that paper" will recognise. `cell_drift.py` is the
+worked example of the shape.
+
+### `cell_drift` — mixture fits against pure-phase fits
+
+A multi-phase Pawley fit of a mixture refines every cell at once, and each can
+settle somewhere other than where the same phase refines on its own. This puts
+each phase of a mixture fit next to a single-phase fit of the pure substance —
+both from measured patterns, not simulated from a CIF:
+
+```bash
+achdiff misc run cell_drift --pure ZIF-4_pure.out ZIF-zni_pure.out --mix mix_50-50.out mix_25-75.out
+```
+
+```
+  ZIF-4 (61)  vs  sample-B-cryst.out   [matched by name]
+                      pure         mixture           delta   delta %  delta/esd
+    a            15.517(2)     15.4753(10)       -0.041(2)    -0.267      -18.6 *
+    b          15.4964(18)     15.5139(10)        0.018(2)    +0.113       +8.5 *
+    c            18.036(2)     18.0750(13)        0.039(3)    +0.217      +14.2 *
+    V           4336.8(10)       4339.5(5)         2.7(11)    +0.063       +2.5
+```
+
+- Phases are matched by the names `rp` writes into every `.out`. Where one side
+  has no name, a space group only one pure fit has will do; two *differently*
+  named phases are never matched on space group alone. `NAME=file.out` names a
+  pure fit yourself.
+- `delta/esd` uses the two esds combined, and is starred from 3 up. TOPAS esds
+  tend to be too small, so read a star as "worth a look", not as proof.
+- Several mixtures give one bar each per parameter in the figure; `-s` saves the
+  figure and the table as CSV.
+
+### `heatmap` — a pattern series as a heat map
+
+Patterns measured along a series — pressure steps in a gas cell, a temperature
+ramp — drawn as one image: 2θ across, the series value up, intensity as colour.
+It is the figure of Mg₂(dobdc) from 1 to 4000 bar in Fig. 2 of
+*J. Am. Chem. Soc.* 2025, **147**, 46075, and draws that look by default. A peak
+that stays put is a vertical line, a peak that shifts bends, and a phase
+transition ends lines and starts others.
+
+```bash
+achdiff misc run heatmap                                    # in a folder of patterns: asks
+achdiff misc run heatmap -i *.xy --range 1.5 12 --label "Mg$_2$(dobdc)" -s
+```
+
+- **Stacked, not interpolated.** Each pattern is a horizontal band centred on its
+  own value and reaching half way to its neighbours, so every row of the map is
+  the pattern measured nearest to it, and uneven steps (1, 100, 200 … bar) keep
+  their true heights. The vertical stretch is only the shape of the axes: forty
+  patterns in a panel four times as wide as it is tall already look continuous.
+  `--smooth` blends linearly between neighbouring patterns instead. That hides
+  the steps, but it also turns a jump between two patterns into what looks like
+  a gradual change.
+- **Values come from the file names**: the number before a unit (`_1bar_`,
+  `2.5GPa`, `300K`), which also labels the axis (*p* / bar). Sample codes and
+  dates in the name are passed over, and so is a unit whose number never changes
+  (a constant `25C` in a pressure series). `--sort-key REGEX` takes another
+  number, as in `pp`; `--y-values 1,100:4000:100` gives them yourself, in
+  file-name order. Two patterns at one value are refused — a run that comes back
+  down needs one map per leg.
+- **Colours**: `--cmap` takes any matplotlib colormap (`viridis`, `Blues_r`),
+  part of one (`PuBu:0.28:1`), or colours to blend (`white,#08306b`). The default
+  is the paper's, measured off the published figure: ColorBrewer PuBu without its
+  palest 28 %. Intensity goes on a square-root scale, which puts the background
+  of our gas-cell patterns where the paper's sits; `--scale linear` makes colour
+  proportional to intensity, `--scale log` brings up the weakest peaks.
+  `--normalize` scales each pattern to its own maximum first.
+- **Figure**: a journal column wide (`--size 3.5 1.2`), Arial, outward ticks; the
+  first value always gets a tick (the paper's "1" bar). `-s` saves it at
+  `--dpi 300`; in an SVG or PDF the map is embedded as an image and the text stays
+  vector. `--colorbar` adds a colour bar, which the paper does without.
+- Columns that are zero in every pattern — a masked detector edge — are left off
+  the ends; `--range LO HI` picks the 2θ window yourself. Patterns on different
+  2θ grids are interpolated onto the range they all share.
+- Labels are matplotlib mathtext. In PowerShell put a label containing `$` in
+  single quotes (`--label 'Mg$_2$(dobdc)'`), or `$` starts a variable; cmd takes
+  the double quotes above.
+
 ## Requirements
 
 Python ≥ 3.10. Dependencies install automatically: numpy, matplotlib, spglib,
@@ -769,11 +902,13 @@ src/achdiff/
 ├── identity.py          # who is running this
 ├── styles.py            # per-person, per-plotter style sheets
 ├── cmdline.py           # every tool's parsing: default flags, then -d
+├── misc/                # one-off analyses: kit.py is all they import
 ├── document.py          # -d: the command, kept as run<N>.bat
 ├── core/
 │   ├── rounding.py      # crystallographic rounding (one copy)
 │   ├── cif.py           # CIF resolution, reflection + pattern simulation
 │   ├── readers.py       # measured patterns: pq, pf and conv read here
+│   ├── topas.py         # .out parsing: cells, phase names (one copy)
 │   ├── overlays.py      # -m and -b, shared by pp and pq
 │   ├── animate.py       # GIFs of a sequential run
 │   └── _molom/          # vendored MoloM crystallography (do not edit)

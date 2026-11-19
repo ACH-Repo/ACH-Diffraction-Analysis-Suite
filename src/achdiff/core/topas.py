@@ -105,10 +105,39 @@ def parse_phases(path):
 				if m:
 					params[key] = m.group(1).strip()
 
+		# TOPAS reports the volume as its own refined quantity, esd and all, so
+		# it is read rather than recomputed from a cell whose correlations are
+		# not in the file.
+		vol_m = re.search(r'\bcell_volume\s+(\S+)', block)
+
 		if params:
-			phases.append({'system': system, 'space_group': sg, 'params': params})
+			phases.append({'system': system, 'space_group': sg, 'params': params,
+			               'volume': vol_m.group(1) if vol_m else None})
 
 	return phases
+
+
+def phase_names(path):
+	"""(name, space group) per phase, from the audit line rp writes at the top of
+	an .inp and TOPAS carries into the .out::
+
+	    ' Selected phases: "ZIF-4" (61) | "ZIF-zni" (110)
+
+	In declaration order, the same order as `parse_phases`. [] when the line is
+	absent -- a hand-written .inp has none -- or the file cannot be read.
+
+	Only the first audit line counts. Both tokens come back as written, and no
+	entry is dropped, even one with an empty name or a space group that is not
+	a number: callers pair names with phases by position, so a skipped entry
+	would shift every phase after it onto the wrong name."""
+	try:
+		raw = Path(path).read_text(encoding='utf-8', errors='replace')
+	except OSError:
+		return []
+	match = re.search(r'Selected phases:(.*)', raw)
+	if not match:
+		return []
+	return re.findall(r'"([^"]*)"\s*\(([^)]*)\)', match.group(1))
 
 
 def clean_value(token):

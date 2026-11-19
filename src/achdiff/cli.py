@@ -798,6 +798,96 @@ def cmd_flags_clear(args):
 	return 0
 
 
+def _misc_scripts():
+	"""(misc module, user, {name: Script}) -- imported here so `achdiff alias` and
+	friends never pay for it."""
+	from . import misc
+	user, _ = identity.resolve(None)
+	return misc, user, misc.available(user)
+
+
+def _misc_find(name):
+	misc, user, scripts = _misc_scripts()
+	script = scripts.get(Path(name).stem)
+	if script is None:
+		print(f'[!] No misc script called {name!r}. `achdiff misc` lists them: '
+		      f'{", ".join(scripts) or "none yet"}.')
+	return misc, script
+
+
+def cmd_misc_list(args):
+	misc, user, scripts = _misc_scripts()
+	print('Misc scripts -- one-off analyses, kept in case they are needed again.')
+	print()
+	width = max((len(n) for n in scripts), default=0)
+	for name, script in scripts.items():
+		print(f'  {name:<{width}}  {script.summary}')
+		notes = []
+		if script.about.get('for'):
+			notes.append(f'for {script.about["for"]}')
+		who = ', '.join(v for v in (script.about.get('author'), script.about.get('written')) if v)
+		if who:
+			notes.append(who)
+		if script.source == 'lab':
+			notes.append('from the lab folder')
+		if notes:
+			print(f'  {"":<{width}}  ({"; ".join(notes)})')
+	if not scripts:
+		print('  none yet')
+	print()
+
+	configured = config.get('misc_dir', user=user)
+	lab = misc.lab_dir(user)
+	if lab:
+		print(f'Lab folder: {lab}')
+	elif configured:
+		print(f'[!] Lab folder {configured} is set but does not exist.')
+	else:
+		print('Lab folder: not set. To share your own scripts with everyone:')
+		print(r'  achdiff profile set --global misc_dir="D:\path\to\folder"')
+	print()
+	print('  achdiff misc run NAME     asks for what it needs when given nothing')
+	print('  achdiff misc show NAME    what it does, in full')
+	print('  achdiff misc copy NAME    a copy in this folder, to edit by hand')
+	return 0
+
+
+def cmd_misc_show(args):
+	misc, script = _misc_find(args.name)
+	if script is None:
+		return 1
+	print(f'{script.name}   ({script.path})')
+	for key in ('for', 'author', 'written'):
+		if script.about.get(key):
+			print(f'  {key + ":":<9}{script.about[key]}')
+	print()
+	print(script.doc or '(no description)')
+	return 0
+
+
+def cmd_misc_run(args):
+	misc, script = _misc_find(args.name)
+	if script is None:
+		return 1
+	return misc.run(script, args.args)
+
+
+def cmd_misc_copy(args):
+	misc, script = _misc_find(args.name)
+	if script is None:
+		return 1
+	target = misc.copy(script, args.dir or '.', force=args.force)
+	if target is None:
+		print(f'[!] {Path(args.dir or ".") / script.path.name} already exists. '
+		      f'Re-run with --force to replace it.')
+		return 1
+	print(f'[+] Copied {script.name} to {target}')
+	print(f'    Edit it as you like; it runs on its own with:  python {target.name}')
+	print(f'    It imports only achdiff.misc.kit from the suite, so it keeps working')
+	print(f'    wherever it is, as long as the suite is installed.')
+	return 0
+
+
 def _on_path(directory):
 	entries = os.environ.get('PATH', '').split(os.pathsep)
 	directory = str(directory).rstrip('\\/').lower()
@@ -978,6 +1068,32 @@ def _build_parser():
 	f_clear = _with_flags_scope(fl_sub.add_parser(
 		'clear', help="Remove a tool's default flags."))
 	f_clear.set_defaults(func=cmd_flags_clear)
+
+	mi = sub.add_parser('misc', help='One-off analyses kept for later: list, run, copy.',
+	                    description='Analyses too specific to be a tool -- one comparison '
+	                                'for one paper -- kept in case they are needed again. '
+	                                'Without a subcommand, lists them.')
+	mi.set_defaults(func=cmd_misc_list)
+	mi_sub = mi.add_subparsers(dest='action')
+	m_ls = mi_sub.add_parser('list', help='List the misc scripts.')
+	m_ls.set_defaults(func=cmd_misc_list)
+	m_show = mi_sub.add_parser('show', help='Explain a script in full.')
+	m_show.add_argument('name', metavar='NAME')
+	m_show.set_defaults(func=cmd_misc_show)
+	m_run = mi_sub.add_parser('run', help='Run a script; it asks for what it needs.',
+	                          usage='achdiff misc run NAME [ARGS ...]')
+	m_run.add_argument('name', metavar='NAME')
+	# REMAINDER: everything after NAME is the script's own, -h included.
+	m_run.add_argument('args', nargs=argparse.REMAINDER, metavar='ARGS',
+	                   help="The script's own arguments; `achdiff misc run NAME -h` lists them.")
+	m_run.set_defaults(func=cmd_misc_run)
+	m_copy = mi_sub.add_parser('copy', help='Copy a script somewhere to edit it by hand.')
+	m_copy.add_argument('name', metavar='NAME')
+	m_copy.add_argument('dir', nargs='?', default=None, metavar='DIR',
+	                    help='Where to put it (default: here).')
+	m_copy.add_argument('--force', action='store_true',
+	                    help='Replace a file of the same name there.')
+	m_copy.set_defaults(func=cmd_misc_copy)
 
 	conf = sub.add_parser('config', help='Locate the configuration file.')
 	conf_sub = conf.add_subparsers(dest='action', required=True)

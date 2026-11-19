@@ -8,7 +8,7 @@ from decimal import Decimal, getcontext
 import copy
 import argparse
 from ..core.rounding import cryst_round
-from ..core import resource
+from ..core import resource, topas
 from .. import cmdline
 from ..progname import prog_name
 
@@ -69,17 +69,6 @@ def split_phases(raw):
 		return [raw]
 	bounds = starts + [len(raw)]
 	return [raw[bounds[i]:bounds[i + 1]] for i in range(len(starts))]
-
-
-def phase_names(raw):
-
-	'''(name, space group) pairs from the wizard's audit-trail header:
-	' Selected phases: "ZIF-62" (61) | "H2pPDA" (14)'''
-
-	match = re.search(r'Selected phases:(.*)', raw)
-	if not match:
-		return []
-	return re.findall(r'"([^"]*)"\s*\(([^)]*)\)', match.group(1))
 
 
 def uniquify(labels):
@@ -383,7 +372,7 @@ def get_data(path,base):
 		raw = inf.read()
 
 	quality = find_quality(raw)
-	names = phase_names(raw)
+	names = topas.phase_names(path)
 	blocks = split_phases(raw)
 
 	phases = []

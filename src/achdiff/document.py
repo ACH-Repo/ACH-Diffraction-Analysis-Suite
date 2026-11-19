@@ -218,17 +218,25 @@ def render_sh(command, args, stamp):
 	                  'cd "$(dirname "$0")" || exit 1', line]) + '\n'
 
 
-def write_run_file(parser, fallback, module, silent=False, argv=None, directory='.'):
+def write_run_file(parser, fallback, module, silent=False, argv=None, directory='.',
+                   command=None):
 	"""Write run<N>[_s].bat for this invocation. Returns the path, or None.
 
 	`fallback` is the tool's own command name and `module` its module, for when
-	the name typed is not on PATH. Call it once the arguments have parsed, so a
-	typo or -h leaves no file behind. A failure to write is reported, never
-	raised: the plot is the job, the record of it is a courtesy.
+	the name typed is not on PATH. `command` replaces both when the run is not
+	a tool of its own -- `achdiff misc run NAME`, say. Call it once the
+	arguments have parsed, so a typo or -h leaves no file behind. A failure to
+	write is reported, never raised: the plot is the job, the record of it is a
+	courtesy.
 	"""
 	argv = list(sys.argv[1:] if argv is None else argv)
 	args = without_document_flag(parser, argv)
-	command, via_call = _command(fallback, module)
+	if command:
+		command = list(command)
+		found = shutil.which(command[0])
+		via_call = bool(found) and Path(found).suffix.lower() in ('.cmd', '.bat')
+	else:
+		command, via_call = _command(fallback, module)
 	stamp = f'{" ".join(command)} -d, {datetime.now():%Y-%m-%d %H:%M}'
 
 	is_bat = os.name == 'nt'
