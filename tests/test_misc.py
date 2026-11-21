@@ -259,7 +259,8 @@ def write_series(folder, pressures, zeros=0, shift=0.0, numbers=None,
 
 _hm = _all['heatmap']
 check('heatmap ships with the package, its first docstring line as summary',
-      _hm.summary, 'A pattern series as a heat map: 2theta across, pressure up, intensity as colour.')
+      _hm.summary, 'A pattern series as a heat map: 2theta or Q across, pressure up, intensity as '
+                   'colour.')
 check('...and says what it was written for', 'J. Am. Chem. Soc. 2025' in _hm.about.get('for', ''), True)
 
 # Values from the names: the number before a unit, not the sample code or date.
@@ -377,6 +378,61 @@ check('...smooth too: nothing is blended across it', [np.isnan(r) for r in _rows
 check('the series axis gets the paper\'s ticks: 1, 2000, 4000, minors between',
       heatmap.series_ticks(1, 4000, -50, 4050), ([1.0, 2000.0, 4000.0], [1000.0, 3000.0]))
 
+# The x axis: 2theta or Q, and converting between them.
+check('Q = 4 pi sin(theta) / lambda', round(float(kit.convert_x(30.0, '2theta', 'q', 1.5406)), 4),
+      round(4 * np.pi * np.sin(np.radians(15)) / 1.5406, 4))
+check('...and back', round(float(kit.convert_x(kit.convert_x(30.0, '2theta', 'q', 1.5406), 'q',
+                                               '2theta', 1.5406)), 9), 30.0)
+check('Q in 1/nm is ten times Q in 1/angstrom, with no wavelength needed',
+      float(kit.convert_x(2.0, 'q', 'q-nm')), 20.0)
+check('2theta to Q without a wavelength is refused',
+      'needs the wavelength' in (refused(kit.convert_x, 30.0, '2theta', 'q') or ''), True)
+check('a Q the wavelength cannot reach is refused',
+      'cannot' in (refused(kit.convert_x, 9.0, 'q', '2theta', 1.5406) or ''), True)
+_hd = Path(tempfile.mkdtemp())
+(_hd / 'pyfai.xy').write_text('# == pyFAI calibration ==\n# Wavelength: 2.0730e-11 m\n'
+                              '#       q_A^-1             I\n0.1 5\n0.2 6\n', encoding='utf-8')
+(_hd / 'dioptas.xy').write_text('# Dioptas export\n#       2th_deg             I\n1 5\n2 6\n',
+                                encoding='utf-8')
+(_hd / 'bare.xy').write_text('1 5\n2 6\n', encoding='utf-8')
+check('a pyFAI header gives the x quantity and the wavelength, in angstrom',
+      tuple(round(v, 6) if isinstance(v, float) else v for v in kit.x_from_header(_hd / 'pyfai.xy')),
+      ('q', 0.2073))
+check('...a DIOPTAS one the quantity',
+      (kit.x_from_header(_hd / 'dioptas.xy'), kit.x_from_header(_hd / 'bare.xy')),
+      (('2theta', None), (None, None)))
+_xi = heatmap.x_setup([_hd / 'pyfai.xy'])
+check('with no flags, the header decides', (_xi['data'], _xi['axis'], _xi['data_how']),
+      ('q', 'q', 'from the file headers'))
+_xi = heatmap.x_setup([_hd / 'bare.xy'])
+check('with no header either, the files are taken as 2theta, and the notes say so',
+      (_xi['data'], 'no header' in _xi['data_how']), ('2theta', True))
+check('--x-data against the header is a warning, and --x-data wins',
+      (heatmap.x_setup([_hd / 'pyfai.xy'], x_data='2theta')['data'],
+       heatmap.x_setup([_hd / 'pyfai.xy'], x_data='2theta')['warning'] is not None), ('2theta', True))
+check('headers that disagree are refused', 'disagree' in (refused(
+	heatmap.x_setup, [_hd / 'pyfai.xy', _hd / 'dioptas.xy']) or ''), True)
+check('a conversion takes the header\'s wavelength',
+      heatmap.x_setup([_hd / 'pyfai.xy'], x_axis='2theta')['wavelength_how'], 'from the file headers')
+check('...and without any wavelength is refused', 'needs the wavelength' in (refused(
+	heatmap.x_setup, [_hd / 'bare.xy'], x_axis='q') or ''), True)
+_grid, _Zg = heatmap.even_grid(np.array([0.0, 1.0, 3.0]), np.array([[0.0, 1.0, 3.0]]))
+check('an uneven grid, as Q from 2theta is, goes onto an even one at its finest step',
+      (_grid.tolist(), _Zg.tolist()), ([0.0, 1.0, 2.0, 3.0], [[0.0, 1.0, 2.0, 3.0]]))
+
+import matplotlib  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+_args = heatmap.build_parser().parse_args(['--x-data', 'q'])
+_st, _gr = heatmap.plan_steps([0, 100])
+with plt.rc_context(heatmap.STYLE):
+	_fig, _shape = heatmap.figure(np.linspace(1, 10, 50), np.ones((2, 50)) + np.arange(50), _st, 0,
+	                              100, kit.X_QUANTITIES['q'].label, '$p$ / bar',
+	                              heatmap.colormap('PuBu'), matplotlib.colors.Normalize(0, 60), _args)
+check('the plot is labelled with the quantity, and holds no text by default',
+      (_fig.axes[0].get_xlabel(), [t.get_text() for t in _fig.axes[0].texts]),
+      (r'$Q$ / Å$^{-1}$', []))
+plt.close(_fig)
+
 _x1 = np.linspace(1, 10, 91)
 _x2 = np.linspace(2, 12, 51)
 _tt, _Z = heatmap.common_grid([(_x1, _x1 * 2), (_x2, _x2 * 2)])
@@ -448,6 +504,36 @@ check('--fill interpolates them, and the notes give the weights',
        'filled by linear interpolation' in _filled), (0, True, True))
 check('a template that fits the names two ways stops the run, saying so',
       (_code_a, 'more than one way' in _text_a), (1, True))
+
+# Q data: given with --x-data, read from a header, or converted from 2theta.
+os.chdir(_w7)
+try:
+	_code_q, _text_q = quiet(heatmap.main, ['--x-data', 'q', '-s', '-x', 'png', '--name', 'q'],
+	                         command=['heatmap'])
+	_code_c, _text_c = quiet(heatmap.main, ['--x-axis', 'q', '--wavelength', '1.5406', '-s', '-x',
+	                                        'png', '--name', 'conv'], command=['heatmap'])
+finally:
+	os.chdir(_cwd)
+check('--x-data q puts Q on the axis and in the notes',
+      (_code_q, 'Q 1 to 19.99 1/A' in _text_q,
+       'Q in Å⁻¹, as in the files (given with --x-data)' in notes_text(_w7 / 'q_SI.txt')),
+      (0, True, True))
+check('--x-axis q converts from 2theta, and the notes say with what wavelength',
+      (_code_c, 'converted from 2θ to Q with λ = 1.5406 Å' in notes_text(_w7 / 'conv_SI.txt')),
+      (0, True))
+_w9 = Path(tempfile.mkdtemp())
+for _p in (1, 100, 200):
+	(_w9 / f's_{_p}bar.xy').write_text(
+		'# Wavelength: 2.0730e-11 m\n#   q_A^-1   I\n'
+		+ ''.join(f'{q:.3f} {50 + 900 * np.exp(-0.5 * ((q - 2) / 0.02) ** 2):.3f}\n'
+		          for q in np.arange(0.5, 5.0, 0.005)), encoding='utf-8')
+os.chdir(_w9)
+try:
+	_code_h, _text_h = quiet(heatmap.main, ['-s', '-x', 'png'], command=['heatmap'])
+finally:
+	os.chdir(_cwd)
+check('files whose header says Q are drawn in Q without a flag',
+      (_code_h, 'x: Q in 1/A, from the file headers.' in _text_h), (0, True))
 _rec = next(_w4.glob('run*.bat'), None) or next(_w4.glob('run*.sh'), None)
 check('-d records it as an achdiff misc run command',
       _rec is not None and 'achdiff misc run heatmap -s -x png --label' in _rec.read_text(), True)
@@ -468,9 +554,9 @@ check('one pattern is not a map, and it says so',
 check('an unknown colormap stops it before anything is read',
       (_code_cmap, 'no colormap called' in _text_cmap), (1, True))
 
-# The wizard, run bare in a console: Enter takes every pattern, their order and
-# the values from the names, no range, then a label, then save.
-_answers = iter(['', '', '', '', 'Mg$_2$(dobdc)', 'y'])
+# The wizard, run bare in a console: Enter takes every pattern, 2theta, their
+# order and the values from the names, no range, then a label, then save.
+_answers = iter(['', '', '', '', '', 'Mg$_2$(dobdc)', 'y'])
 kit.interactive = lambda: True
 builtins.input = lambda prompt='': next(_answers)
 _w5 = write_series(tempfile.mkdtemp(), [1, 250, 500])
@@ -493,7 +579,7 @@ _x = np.arange(1.0, 20.0, 0.01)
 for _stem, _p in (('b_run1', 100), ('a_run2', 200), ('c_run3', 300)):
 	np.savetxt(_w8 / f'{_stem}_p{_p}.xy',
 	           np.column_stack([_x, 50 + 1000 * np.exp(-0.5 * ((_x - 5) / 0.03) ** 2)]))
-_answers = iter(['', 'n', '*_run#_*', '*_p#.xy', '$p$ / MPa', '', '', 'y'])
+_answers = iter(['', 'q', 'n', '*_run#_*', '*_p#.xy', '$p$ / MPa', '', '', 'y'])
 kit.interactive = lambda: True
 builtins.input = lambda prompt='': next(_answers)
 os.chdir(_w8)
@@ -503,9 +589,9 @@ finally:
 	os.chdir(_cwd)
 	builtins.input = _real_input
 	kit.interactive = _real_interactive
-check('the wizard takes the order and the values as templates',
-      (_code, 'achdiff misc run heatmap -i *.xy --order-name *_run#_* --y-name *_p#.xy '
-              '--y-label "$p$ / MPa" -s' in _text), (0, True))
+check('the wizard takes Q, and the order and the values as templates',
+      (_code, 'achdiff misc run heatmap -i *.xy --x-data q --order-name *_run#_* --y-name '
+              '*_p#.xy --y-label "$p$ / MPa" -s' in _text), (0, True))
 check('...showing what each template reads before taking it',
       ('In that order: b_run1_p100.xy' in _text, 'Reads 100, 200, 300 (3 values)' in _text),
       (True, True))

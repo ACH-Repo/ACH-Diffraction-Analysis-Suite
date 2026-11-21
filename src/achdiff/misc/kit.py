@@ -23,6 +23,13 @@ Reading measured patterns
     pattern(path)     (two_theta, intensity), from any file pq and conv read
     PATTERN_TYPES     the suffixes pattern() reads: '.xy', '.dat', '.raw', ...
 
+The x quantity: 2theta or Q
+    X_QUANTITIES      '2theta', 'q', 'q-nm' -> name, symbol, unit, axis label
+    convert_x(x, source, target, wavelength=None)
+                      2theta <-> Q (1/angstrom or 1/nm); wavelength in angstrom
+    x_from_header(path)
+                      (quantity, wavelength) from a pyFAI / DIOPTAS header
+
 Series
     values(spec)      "1,100:900:100" -> [1.0, 100.0, ..., 900.0], as pp --x-values
     natural_key(text) a sort key that puts scan_2 before scan_10
@@ -50,6 +57,7 @@ from achdiff import __version__ as _version
 from achdiff import document
 from achdiff.core import readers as _readers
 from achdiff.core import topas as _topas
+from achdiff.core import xaxis as _xaxis
 from achdiff.core.animate import natural_key as _natural_key
 from achdiff.core.animate import parse_value_error as _parse_value_error
 from achdiff.core.animate import parse_x_values as _parse_x_values
@@ -105,6 +113,25 @@ def pattern(path):
 	pq plots it and conv writes it out. Raises ValueError, with a message fit to
 	print, for a file it cannot read."""
 	return _readers.read(path)
+
+
+#: '2theta', 'q' (1/angstrom), 'q-nm' (1/nm) -> Quantity(key, name, plain_unit,
+#: symbol, unit, label): name and plain_unit ASCII for a console, symbol and
+#: unit for a person, label mathtext for an axis.
+X_QUANTITIES = _xaxis.QUANTITIES
+
+
+def convert_x(x, source, target, wavelength=None):
+	"""x from one quantity to another ('2theta', 'q', 'q-nm'). Between 2theta and
+	Q it needs the wavelength in angstrom; raises ValueError without one, or for a
+	Q that wavelength cannot reach."""
+	return _xaxis.convert(x, source, target, wavelength)
+
+
+def x_from_header(path):
+	"""(quantity or None, wavelength in angstrom or None), from the comment lines
+	pyFAI and DIOPTAS write at the top of a pattern ("q_A^-1", "Wavelength: ...")."""
+	return _xaxis.from_header(path)
 
 
 # ---------------------------------------------------------------------- series

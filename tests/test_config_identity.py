@@ -690,6 +690,25 @@ check('names the key does not match are kept and handed back, not dropped',
 check('an invalid expression is refused rather than sorting by nothing',
       _raises(lambda: animate.sort_by_pattern(['a'], '_([0-9')), True)
 
+# ---------- ordering a run: --order-name, the same with a wildcard ----------
+check('a template sorts by the number at its #, decimals and all',
+      animate.sort_by_template(_press, '*_#GPa'),
+      (['c_0GPa', 'c_0.5GPa', 'c_1GPa', 'c_1.5GPa', 'c_2GPa', 'c_10GPa'], []))
+check('several #s sort left to right',
+      animate.sort_by_template(['T300_r2', 'T100_r10', 'T100_r2'], 'T#_r#')[0],
+      ['T100_r2', 'T100_r10', 'T300_r2'])
+check('names the template does not fit are kept and handed back, as with --sort-key',
+      animate.sort_by_template(['r_2GPa', 'calib', 'r_1GPa'], 'r_#GPa'),
+      (['r_1GPa', 'r_2GPa'], ['calib']))
+check('a template that fits a name two ways is refused',
+      _raises(lambda: animate.sort_by_template(['GH077a_27_750_1GPa'], '*_#_*')), True)
+check('...and so is one without a #', _raises(lambda: animate.sort_by_template(['a'], '*GPa')),
+      True)
+_pp_args = plotter._build_parser().parse_args(['--gif', '--order-name', '*_#GPa*'])
+check('pp takes --order-name', _pp_args.order_name, '*_#GPa*')
+check('...and --order-regex as another name for --sort-key',
+      plotter._build_parser().parse_args(['--order-regex', r'_(\d+)GPa']).sort_key, r'_(\d+)GPa')
+
 
 # ---------- x values: --x-values ----------
 check('a plain list', animate.parse_x_values('0,0.5,1,2'), [0.0, 0.5, 1.0, 2.0])

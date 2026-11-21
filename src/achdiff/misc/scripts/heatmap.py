@@ -1,4 +1,4 @@
-r"""A pattern series as a heat map: 2theta across, pressure up, intensity as colour.
+r"""A pattern series as a heat map: 2theta or Q across, pressure up, intensity as colour.
 
 Patterns measured along a series -- pressure steps in a gas cell, a temperature
 ramp, a time series -- drawn as one image, the way Fig. 2 of J. Am. Chem. Soc.
@@ -27,6 +27,11 @@ Values and order come from the file names, whichever way suits:
 Without either, the value is the number before a unit (1bar, 2.5GPa, 300K) and
 the order is the order the names sort in. --y-values 1,100:4000:100 gives the
 values yourself, in measurement order.
+
+The x axis is what the files hold: 2theta in degrees unless --x-data says q
+(1/angstrom) or q-nm (1/nm), or a pyFAI or DIOPTAS header says so. --x-axis
+shows another, converting between 2theta and Q with --wavelength (angstrom),
+which a header can also supply.
 
 Colours: --cmap takes any matplotlib colormap (viridis, Blues_r), part of one
 (PuBu:0.28:1 is PuBu from 28 % of the way along to the end), or colours to blend
@@ -179,10 +184,25 @@ def build_parser():
 	                   help='Blend linearly between neighbouring steps instead of drawing each '
 	                        'as a band.')
 
+	xs = parser.add_argument_group('x axis')
+	quantities = tuple(kit.X_QUANTITIES)
+	xs.add_argument('--x-data', choices=quantities, default=None,
+	                help='What the first column of the files is: 2theta in degrees, q in '
+	                     '1/angstrom or q-nm in 1/nm. Default: what a pyFAI or DIOPTAS header '
+	                     'says, else 2theta.')
+	xs.add_argument('--x-axis', choices=quantities, default=None,
+	                help='What the x axis shows, when not that: 2theta and Q convert into '
+	                     'each other with --wavelength.')
+	xs.add_argument('--wavelength', type=_step_arg, default=None, metavar='ANGSTROM',
+	                help='The wavelength, for converting between 2theta and Q, e.g. 0.2073. '
+	                     'Default: from a pyFAI or DIOPTAS header.')
+	xs.add_argument('--x-label', default=None, metavar='TEXT',
+	                help='Label of the x axis, over the one the quantity has.')
+	xs.add_argument('--range', nargs=2, type=float, default=None, metavar=('LO', 'HI'),
+	                help='The x range to show, in the units of the axis. Default: all of it, '
+	                     'less any columns at the ends that are zero in every pattern.')
+
 	look = parser.add_argument_group('the figure')
-	look.add_argument('--range', nargs=2, type=float, default=None, metavar=('LO', 'HI'),
-	                  help='The 2theta range to show. Default: all of it, less any columns at '
-	                       'the ends that are zero in every pattern.')
 	look.add_argument('--cmap', default=DEFAULT_CMAP, metavar='SPEC',
 	                  help='A matplotlib colormap, part of one (NAME:LOW:HIGH, 0 to 1), or '
 	                       'colours to blend (white,#08306b) (default: %(default)s, the '
@@ -532,28 +552,67 @@ def bands(steps):
 	return list(zip([c[0] - (c[1] - c[0]) / 2] + mids, mids + [c[-1] + (c[-1] - c[-2]) / 2]))
 
 
-# ---------------------------------------------------------------- 2theta grid
+# --------------------------------------------------------------------- x grid
+
+def x_setup(paths, x_data=None, x_axis=None, wavelength=None):
+	"""What the x column is, what the axis shows, and the wavelength between them,
+	each with how it was decided: a dict for run and the SI notes.
+
+	The flags first; then what pyFAI or DIOPTAS headers say; else 2theta. Raises
+	ValueError for headers that disagree with each other, and for a conversion
+	between 2theta and Q with no wavelength from either."""
+	found = [kit.x_from_header(p) for p in paths]
+	keys = sorted({k for k, _w in found if k})
+	waves = [w for _k, w in found if w]
+	if len(keys) > 1:
+		raise ValueError(f'the file headers disagree on what the x column is '
+		                 f'({", ".join(keys)}); choose the files with -i')
+	header = keys[0] if keys else None
+	warning = None
+	if x_data:
+		data, data_how = x_data, 'given with --x-data'
+		if header and header != x_data:
+			warning = f'--x-data {x_data}, but the file headers say {header}'
+	elif header:
+		data, data_how = header, 'from the file headers'
+	else:
+		data, data_how = '2theta', 'taken as 2θ: no --x-data, and no header saying otherwise'
+	axis = x_axis or data
+	if wavelength:
+		lam, lam_how = float(wavelength), 'given with --wavelength'
+	elif waves:
+		lam, lam_how = waves[0], 'from the file headers'
+	else:
+		lam, lam_how = None, ''
+	if kit.X_QUANTITIES[data].name != kit.X_QUANTITIES[axis].name and lam is None:
+		raise ValueError(f'showing {axis} from files in {data} needs the wavelength: '
+		                 f'--wavelength, in angstrom')
+	return {'data': data, 'axis': axis, 'wavelength': lam, 'data_how': data_how,
+	        'wavelength_how': lam_how, 'warning': warning, 'regridded': False}
+
+
+def _even(x):
+	"""Whether x is evenly stepped and rising: every point within a tenth of a step
+	of where an even grid puts it, so a column rounded in a text file still counts."""
+	step = (x[-1] - x[0]) / (x.size - 1) if x.size > 1 else 0.0
+	return bool(step > 0 and np.all(np.abs(x - np.linspace(x[0], x[-1], x.size)) <= 0.1 * step))
+
 
 def common_grid(patterns):
-	"""(two_theta, Z): every pattern on one evenly stepped 2theta grid, Z with one
-	row per pattern. Patterns from one detector share their grid and are used as
-	they are; others are interpolated onto the range they all cover, at the finest
-	step among them. Raises ValueError when they share no range."""
+	"""(xgrid, Z): every pattern on one evenly stepped x grid, Z with one row per
+	pattern. Patterns from one detector share their grid and are used as they are;
+	others are interpolated onto the range they all cover, at the finest step among
+	them. Raises ValueError when they share no range."""
 	xs = [np.asarray(x, dtype=float) for x, _y in patterns]
 	first = xs[0]
-	# Even enough when every point is within a tenth of a step of where an even
-	# grid puts it: 2theta rounded in a text file still counts.
-	step = (first[-1] - first[0]) / (first.size - 1) if first.size > 1 else 0.0
-	even = step > 0 and np.all(np.abs(first - np.linspace(first[0], first[-1], first.size))
-	                           <= 0.1 * step)
 	shared = all(x.shape == first.shape and np.allclose(x, first, rtol=0, atol=1e-6) for x in xs)
-	if even and shared:
+	if _even(first) and shared:
 		return first.copy(), np.vstack([np.asarray(y, dtype=float) for _x, y in patterns])
 
 	lo = max(x.min() for x in xs)
 	hi = min(x.max() for x in xs)
 	if hi <= lo:
-		raise ValueError('the patterns have no 2theta range in common')
+		raise ValueError('the patterns have no x range in common')
 	step = min(np.median(np.abs(np.diff(x))) for x in xs if x.size > 1)
 	grid = lo + np.arange(int(np.floor((hi - lo) / step + 1e-9)) + 1) * step
 	rows = []
@@ -563,25 +622,40 @@ def common_grid(patterns):
 	return grid, np.vstack(rows)
 
 
-def crop(two_theta, Z, window=None):
+def even_grid(x, Z):
+	"""(grid, Z) on an evenly stepped grid over x's range, at its finest step. A
+	conversion between 2theta and Q needs it: Q is not linear in 2theta, and the
+	image is drawn on even columns. An x already even comes back as it is."""
+	x = np.asarray(x, dtype=float)
+	if x[0] > x[-1]:
+		x, Z = x[::-1], Z[:, ::-1]
+	if _even(x):
+		return x, Z
+	step = float(np.min(np.diff(x)))
+	n = min(int(np.floor((x[-1] - x[0]) / step + 1e-9)) + 1, 4 * x.size)
+	grid = np.linspace(x[0], x[-1], n)
+	return grid, np.vstack([np.interp(grid, x, row) for row in Z])
+
+
+def crop(xgrid, Z, window=None):
 	"""The columns to show: `window` (lo, hi) if given; otherwise all but the
 	columns at either end that are zero in every pattern -- a masked detector edge
 	holds no data and would only stretch the axis. Raises ValueError for a window
 	that leaves fewer than two points."""
-	keep = np.ones(two_theta.size, dtype=bool)
+	keep = np.ones(xgrid.size, dtype=bool)
 	if window is not None:
 		lo, hi = sorted(window)
-		keep &= (two_theta >= lo) & (two_theta <= hi)
+		keep &= (xgrid >= lo) & (xgrid <= hi)
 	else:
 		live = np.flatnonzero(np.any(Z != 0, axis=0))
 		if live.size:
 			keep[:live[0]] = False
 			keep[live[-1] + 1:] = False
 	if keep.sum() < 2:
-		raise ValueError(f'the 2theta range {window[0]:g} to {window[1]:g} holds no data '
-		                 f'(the patterns cover {two_theta[0]:g} to {two_theta[-1]:g})'
+		raise ValueError(f'the x range {window[0]:g} to {window[1]:g} holds no data '
+		                 f'(the patterns cover {xgrid[0]:g} to {xgrid[-1]:g})'
 		                 if window is not None else 'every pattern is zero throughout')
-	return two_theta[keep], Z[:, keep]
+	return xgrid[keep], Z[:, keep]
 
 
 # ------------------------------------------------------------------- the image
@@ -707,13 +781,14 @@ def series_ticks(low, high, bottom=None, top=None, nbins=3):
 	return [float(t) for t in ticks], minors
 
 
-def figure(two_theta, Z, steps, low, high, y_label, cmap, norm, args, dpi=100):
-	"""The heat map, drawn the way the paper's Fig. 2 is: (figure, image shape)."""
+def figure(xgrid, Z, steps, low, high, x_label, y_label, cmap, norm, args, dpi=100):
+	"""The heat map, drawn the way the paper's Fig. 2 is: (figure, image shape).
+	Nothing is written inside the plot unless --label asks for it."""
 	import matplotlib.pyplot as plt
 	from matplotlib.ticker import AutoMinorLocator, FixedLocator, FuncFormatter
 
-	step = (two_theta[-1] - two_theta[0]) / (two_theta.size - 1)
-	window = [two_theta[0], two_theta[-1]]
+	step = (xgrid[-1] - xgrid[0]) / (xgrid.size - 1)
+	window = [xgrid[0], xgrid[-1]]
 	if args.range:
 		# No further than the data: past it there is nothing to draw but white.
 		window = [max(min(args.range), window[0]), min(max(args.range), window[1])]
@@ -730,7 +805,7 @@ def figure(two_theta, Z, steps, low, high, y_label, cmap, norm, args, dpi=100):
 			ax.axhspan(lo, hi, facecolor=GAP_FILL, edgecolor=GAP_COLOUR, hatch='////',
 			           linewidth=0, zorder=0.5)
 	shown = ax.imshow(img, cmap=cmap, norm=norm, zorder=1,
-	                  extent=(two_theta[0] - step / 2, two_theta[-1] + step / 2, bottom, top),
+	                  extent=(xgrid[0] - step / 2, xgrid[-1] + step / 2, bottom, top),
 	                  origin='lower', aspect='auto', interpolation='antialiased')
 	ax.set_xlim(*window)
 	ax.set_ylim(bottom, top)
@@ -740,7 +815,7 @@ def figure(two_theta, Z, steps, low, high, y_label, cmap, norm, args, dpi=100):
 	ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _pos: f'{v:g}'))
 	ax.yaxis.set_minor_locator(FixedLocator(minors))
 	ax.xaxis.set_minor_locator(AutoMinorLocator())
-	ax.set_xlabel(r'$2\theta$ / °')
+	ax.set_xlabel(x_label)
 	ax.set_ylabel(y_label)
 	if args.label:
 		ax.text(0.985, 0.93, args.label, transform=ax.transAxes, ha='right', va='top', zorder=3)
@@ -766,8 +841,9 @@ def _quantity(unit):
 	return 'value'
 
 
-def si_paragraph(n, ser, steps, grid, low, high, args, regridded):
-	"""The processing, as a paragraph for the supporting information."""
+def si_paragraph(n, ser, steps, grid, low, high, args, xinfo):
+	"""The processing, as a paragraph for the supporting information. `xinfo` says
+	what the x axis is and how it got there (see run)."""
 	u = f' {ser.unit}' if ser.unit else ''
 	quantity = _quantity(ser.unit)
 	gaps = [s for s in steps if s.kind != 'measured']
@@ -794,9 +870,24 @@ def si_paragraph(n, ser, steps, grid, low, high, args, regridded):
 	scale = {'linear': 'a linear', 'sqrt': 'a square-root', 'log': 'a logarithmic'}[args.scale]
 	text += (f' Intensities are shown on {scale} colour scale'
 	         + (' after scaling each pattern to its own maximum' if args.normalize else '') + '.')
-	text += (' The patterns were interpolated linearly onto a common 2θ grid.' if regridded
-	         else ' No smoothing or interpolation was applied along 2θ.')
+	data, axis = kit.X_QUANTITIES[xinfo['data']], kit.X_QUANTITIES[xinfo['axis']]
+	if data.key != axis.key and data.name == axis.name:
+		text += f' Q was converted from {data.unit} to {axis.unit}.'
+	elif data.key != axis.key:
+		text += (f' The patterns were converted from {data.symbol} to {axis.symbol} with '
+		         f'λ = {xinfo["wavelength"]:g} Å'
+		         + (f' and interpolated linearly onto an even {axis.symbol} grid.'
+		            if xinfo['regridded'] else '.'))
+	elif xinfo['regridded']:
+		text += f' The patterns were interpolated linearly onto a common {axis.symbol} grid.'
+	else:
+		text += f' No smoothing or interpolation was applied along {axis.symbol}.'
 	return text
+
+
+def _with_unit(text, quantity):
+	"""'11.99' -> '11.99°' or '11.99 Å⁻¹': a degree sign sits on the number."""
+	return f'{text}{quantity.unit}' if quantity.unit == '°' else f'{text} {quantity.unit}'
 
 
 def si_notes(facts):
@@ -804,7 +895,8 @@ def si_notes(facts):
 	and in numbers for whoever checks it."""
 	ser, steps, grid = facts['series'], facts['steps'], facts['grid']
 	low, high, args = facts['low'], facts['high'], facts['args']
-	two_theta, n = facts['two_theta'], len(ser.paths)
+	xgrid, n, xinfo = facts['xgrid'], len(ser.paths), facts['xinfo']
+	data, axis = kit.X_QUANTITIES[xinfo['data']], kit.X_QUANTITIES[xinfo['axis']]
 	u = f' {ser.unit}' if ser.unit else ''
 	edges = bands(steps)
 	bottom, top = edges[0][0], edges[-1][1]
@@ -823,16 +915,26 @@ def si_notes(facts):
 	                    f'(ach-diffraction-suite {kit.SUITE_VERSION})'),
 	       line('Command', getattr(args, 'typed_command', '') or '(not recorded)'),
 	       '', 'For the supporting information', '-' * 30,
-	       wrap.fill(si_paragraph(n, ser, steps, grid, low, high, args, facts['regridded'])),
+	       wrap.fill(si_paragraph(n, ser, steps, grid, low, high, args, xinfo)),
 	       '', 'How the map was made', '-' * 20]
 
 	suffixes = sorted({Path(p).suffix.lower() for p in ser.paths})
-	shared = ('interpolated onto one common grid' if facts['regridded'] else 'all on one grid')
-	out.append(line('Patterns', f'{n} files ({", ".join(suffixes)}); 2θ {two_theta[0]:.3f} to '
-	                            f'{two_theta[-1]:.3f}° in steps of {facts["two_theta_step"]:.5g}°, '
-	                            f'{two_theta.size} points shown, {shared}'
+	shared = ('interpolated onto one even grid' if xinfo['regridded'] else 'all on one grid')
+	upto = _with_unit('%.4g' % xgrid[-1], axis)
+	every = _with_unit('%.5g' % facts['x_step'], axis)
+	out.append(line('Patterns', f'{n} files ({", ".join(suffixes)}); {axis.symbol} '
+	                            f'{xgrid[0]:.4g} to {upto} in steps of {every}, '
+	                            f'{xgrid.size} points shown, {shared}'
 	                            + (' (columns zero in every pattern left out at the ends)'
 	                               if facts['trimmed'] else '')))
+	if data.key == axis.key:
+		text = f'{axis.symbol} in {axis.unit}, as in the files ({xinfo["data_how"]})'
+	else:
+		text = (f'{axis.symbol} in {axis.unit}, converted from {data.symbol} in {data.unit} in '
+		        f'the files ({xinfo["data_how"]})')
+		if data.name != axis.name:
+			text += f' with λ = {xinfo["wavelength"]:g} Å ({xinfo["wavelength_how"]})'
+	out.append(line('X axis', text))
 	out.append(line('Values', ser.values_how))
 	order = ser.order_how
 	missing_numbers = sequence_gaps(ser.order_numbers)
@@ -863,8 +965,8 @@ def si_notes(facts):
 	                              + (', blended between neighbouring steps' if args.smooth else '')
 	                              + f'. In the saved figure the plot is {px_w} x {px_h} px at '
 	                                f'{args.dpi} dpi: about {px_h * per_step / rows:.1f} px per '
-	                                f'step, and {columns / max(px_w, 1):.1f} points of 2θ per '
-	                                f'pixel, averaged for display only'))
+	                                f'step, and {columns / max(px_w, 1):.1f} points of '
+	                                f'{axis.symbol} per pixel, averaged for display only'))
 	out.append(line('Colours', f'{args.cmap}, {args.scale} scale, {facts["colour"][0]:.4g} to '
 	                           f'{facts["colour"][1]:.4g}'
 	                           + (' (given with --limits)' if args.limits else
@@ -960,6 +1062,20 @@ def fill(args, parser):
 	extra = ['-i'] + ([f'*{suffix}'] if len(picked) == len(names) else chosen)
 	opts = {}
 
+	header, _wave = kit.x_from_header(chosen[0])
+	if header:
+		q = kit.X_QUANTITIES[header]
+		print(f'The file header says the x column is {q.name} in {q.plain_unit}.')
+	else:
+		while True:
+			reply = kit.ask('Is the x column 2theta (degrees), q (1/A) or q-nm (1/nm)?',
+			                '2theta').lower()
+			if reply in kit.X_QUANTITIES:
+				break
+			print(f'    One of: {", ".join(kit.X_QUANTITIES)}.')
+		if reply != '2theta':
+			extra += ['--x-data', reply]
+
 	if not kit.ask_yes('Is that the order they were measured in?', default=True):
 		def check_order(kind, text):
 			key = {'template': text} if kind == 'name' else {'regex': text}
@@ -1013,7 +1129,7 @@ def fill(args, parser):
 				extra.append('--fill')
 
 	while True:
-		window = kit.ask('2theta range to show, e.g. 2 12 (Enter for all of it):')
+		window = kit.ask('x range to show, low and high, e.g. 2 12 (Enter for all of it):')
 		parts = window.replace(',', ' ').split()
 		if not parts:
 			break
@@ -1076,11 +1192,17 @@ def run(args):
 			return 1
 
 	try:
-		two_theta, Z = common_grid(patterns)
-		regridded = any(np.asarray(x).shape != two_theta.shape
-		                or not np.allclose(x, two_theta, rtol=0, atol=1e-6) for x, _y in patterns)
-		full = (two_theta[0], two_theta[-1])
-		two_theta, Z = crop(two_theta, Z, args.range)
+		xinfo = x_setup(ser.paths, args.x_data, args.x_axis, args.wavelength)
+		xgrid, Z = common_grid(patterns)
+		regridded = any(np.asarray(x).shape != xgrid.shape
+		                or not np.allclose(x, xgrid, rtol=0, atol=1e-6) for x, _y in patterns)
+		if xinfo['axis'] != xinfo['data']:
+			shown = kit.convert_x(xgrid, xinfo['data'], xinfo['axis'], xinfo['wavelength'])
+			regridded = regridded or not _even(shown[::-1] if shown[0] > shown[-1] else shown)
+			xgrid, Z = even_grid(shown, Z)
+		xinfo['regridded'] = regridded
+		full = (xgrid[0], xgrid[-1])
+		xgrid, Z = crop(xgrid, Z, args.range)
 		if args.normalize:
 			peak = Z.max(axis=1, keepdims=True)
 			Z = Z / np.where(peak > 0, peak, 1.0)
@@ -1102,12 +1224,24 @@ def run(args):
 
 	low, high = values[0], values[-1]
 	u = f' {ser.unit}' if ser.unit else ''
-	trimmed = not args.range and (two_theta[0], two_theta[-1]) != full
+	trimmed = not args.range and (xgrid[0], xgrid[-1]) != full
 	gaps = [f'{s.centre:g}' for s in steps if s.kind != 'measured']
+	data, axis = kit.X_QUANTITIES[xinfo['data']], kit.X_QUANTITIES[xinfo['axis']]
 	print(f'[*] {len(values)} patterns from {low:g} to {high:g}{u}'
 	      + (f' in steps of {grid[0]:g}{u}' if grid else ', no regular step') + '; '
-	      f'2theta {two_theta[0]:.3f} to {two_theta[-1]:.3f}'
+	      f'{axis.name} {xgrid[0]:.4g} to {xgrid[-1]:.4g} {axis.plain_unit}'
 	      + (' (columns zero in every pattern left out)' if trimmed else '') + '.')
+	if xinfo['warning']:
+		print(f'[!] {xinfo["warning"]}; going by --x-data.')
+	if data.key != axis.key:
+		print(f'[*] x: {data.name} in {data.plain_unit} in the files, shown as {axis.name} in '
+		      f'{axis.plain_unit}' + (f' (wavelength {xinfo["wavelength"]:g} A, '
+		                              f'{xinfo["wavelength_how"]})' if data.name != axis.name
+		                              else '') + '.')
+	elif not args.x_data:
+		print(f'[*] x: {data.name} in {data.plain_unit}, '
+		      + ('from the file headers.' if xinfo['data_how'].startswith('from')
+		         else 'taken as that: --x-data q if the files hold Q.'))
 	if gaps:
 		print(f'[*] No pattern at {_join(gaps)}{u}: '
 		      + ('interpolated from the steps either side.' if args.fill
@@ -1126,7 +1260,8 @@ def run(args):
 	import matplotlib.pyplot as plt
 	with plt.rc_context(STYLE):
 		# On screen, drawn large enough to read; the saved file is --size at --dpi.
-		fig, shape = figure(two_theta, Z, steps, low, high, ser.label, cmap, norm, args,
+		fig, shape = figure(xgrid, Z, steps, low, high, args.x_label or axis.label, ser.label,
+		                    cmap, norm, args,
 		                    dpi=100 if args.silent else max(100, 900 / args.size[0]))
 		if not args.silent:
 			plt.show()
@@ -1142,8 +1277,8 @@ def run(args):
 	notes = f'{args.name}_SI.txt'
 	Path(notes).write_text(si_notes({
 		'series': ser, 'steps': steps, 'grid': grid, 'low': low, 'high': high, 'args': args,
-		'two_theta': two_theta, 'two_theta_step': (two_theta[-1] - two_theta[0]) / (two_theta.size - 1),
-		'regridded': regridded, 'trimmed': trimmed, 'image_shape': shape,
+		'xgrid': xgrid, 'x_step': (xgrid[-1] - xgrid[0]) / (xgrid.size - 1),
+		'xinfo': xinfo, 'trimmed': trimmed, 'image_shape': shape,
 		'plot_px': (int(round(box.width * scale)), int(round(box.height * scale))),
 		'colour': (low_c, high_c), 'figure': path, 'when': datetime.now(),
 	}), encoding='utf-8')

@@ -562,12 +562,23 @@ pp --gif --sort-key "_([0-9.]+)GPa"                        # the order
 pp --gif --x-values "0,0.5,1:2:0.5,3,4.5,6,8,10" --x-label "p / GPa"   # the x axis
 ```
 
-**Order.** Fits play in natural order unless `--sort-key` says otherwise, and
-natural order gets decimals wrong: it splits `0.5GPa` at the point and puts it
-*before* `0GPa`. `--sort-key` is a regular expression whose capture groups are
-the sort key, compared as numbers where they are numbers (a decimal comma is
-fine). Several groups sort left to right. Fits it doesn't match are kept, named,
-and put last.
+**Order.** Fits play in natural order unless `--sort-key` or `--order-name` says
+otherwise, and natural order gets decimals wrong: it splits `0.5GPa` at the point
+and puts it *before* `0GPa`. `--sort-key` (also spelt `--order-regex`) is a
+regular expression whose capture groups are the sort key, compared as numbers
+where they are numbers (a decimal comma is fine). `--order-name` says the same
+with a wildcard template, for anyone who doesn't write regular expressions:
+
+```bash
+pp --gif --order-name "*_#GPa*"       # by the pressure in the name
+pp --gif --order-name "#_*"           # by a leading run number
+```
+
+In a template `*` is any text, `?` one character and `#` a number; it covers the
+whole fit name, as `dir *.out` does. A template that fits a name in two ways is
+refused, naming both readings. Several groups or `#`s sort left to right. Fits
+either doesn't match are kept, named, and put last; `--x-map-template` pre-fills
+x values from the first number either reads.
 
 **x values.** Without `--x-values` the x axis is the fit number, which assumes
 evenly spaced steps. That's usually true, but when it isn't the curve can bend
@@ -827,8 +838,19 @@ transition ends lines and starts others.
 
 ```bash
 achdiff misc run heatmap                                    # in a folder of patterns: asks
-achdiff misc run heatmap -i *.xy --range 1.5 12 --label "Mg$_2$(dobdc)" -s
+achdiff misc run heatmap -i *.xy --range 1.5 12 -s          # 2theta data
+achdiff misc run heatmap -i *.xy --x-data q -s              # Q data, in 1/angstrom
 ```
+
+- **The x axis** is what the files hold: 2θ in degrees, unless `--x-data q`
+  (Å⁻¹) or `--x-data q-nm` (nm⁻¹) says otherwise — or the files' own header does,
+  as pyFAI and DIOPTAS write one (`q_A^-1`, `Wavelength: …`). When nothing says,
+  the run prints that it took the files as 2θ. `--x-axis` shows another quantity,
+  converting between 2θ and Q with `--wavelength` in Å (or the header's), and the
+  converted patterns are put back on an even grid; `--x-label` labels anything
+  else. `--range` is in the units of the axis.
+- **Nothing is written inside the plot** unless `--label "Mg$_2$(dobdc)"` asks
+  for it, in the top right corner as in the paper.
 
 - **Stacked, not interpolated.** A series measured in regular steps (1, 100,
   200 … bar) gets one band per step: each pattern covers half a step either side
@@ -886,8 +908,8 @@ achdiff misc run heatmap -i *.xy --range 1.5 12 --label "Mg$_2$(dobdc)" -s
   `--dpi 300`; in an SVG or PDF the map is embedded as an image and the text stays
   vector. `--colorbar` adds a colour bar, which the paper does without.
 - Columns that are zero in every pattern — a masked detector edge — are left off
-  the ends; `--range LO HI` picks the 2θ window yourself. Patterns on different
-  2θ grids are interpolated onto the range they all share.
+  the ends; `--range LO HI` picks the window yourself. Patterns on different
+  x grids are interpolated onto the range they all share.
 - Labels are matplotlib mathtext. In PowerShell put a label containing `$` in
   single quotes (`--label 'Mg$_2$(dobdc)'`), or `$` starts a variable; cmd takes
   the double quotes above.
@@ -937,6 +959,7 @@ src/achdiff/
 │   ├── rounding.py      # crystallographic rounding (one copy)
 │   ├── cif.py           # CIF resolution, reflection + pattern simulation
 │   ├── readers.py       # measured patterns: pq, pf and conv read here
+│   ├── xaxis.py         # 2θ or Q, and converting between them
 │   ├── topas.py         # .out parsing: cells, phase names (one copy)
 │   ├── overlays.py      # -m and -b, shared by pp and pq
 │   ├── animate.py       # GIFs of a sequential run

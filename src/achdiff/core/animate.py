@@ -210,6 +210,22 @@ def template_numbers(names, template):
 	return found
 
 
+def sort_by_template(names, template):
+	"""`sort_by_pattern` for a wildcard template instead of a regular expression:
+	`(ordered, unmatched)`, by the numbers at the template's #s.
+
+	`*_#GPa*` sorts by pressure, decimals and all, which a natural sort gets
+	wrong; several #s compare left to right. Names the template does not fit
+	come back separately, in the order they came, for the caller to report and
+	put last -- as `sort_by_pattern` does. Raises ValueError for a template
+	without a #, and for one that fits a name in more than one way.
+	"""
+	found = template_numbers(names, template)
+	keyed = [(key, name) for key, name in zip(found, names) if key is not None]
+	unmatched = [name for key, name in zip(found, names) if key is None]
+	return [name for _key, name in sorted(keyed, key=lambda kv: kv[0])], unmatched
+
+
 def parse_x_values(spec):
 	"""The x values for a series, from a list and/or ranges: `[float, ...]`.
 

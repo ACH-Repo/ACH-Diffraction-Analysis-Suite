@@ -224,15 +224,22 @@ def _build_parser():
 	                         '--sort-key and --x-values cannot express. Replaces both.')
 	parser.add_argument('--x-map-template', default=None, metavar='FILE',
 	                    help='Write a starting --x-map file listing every fit, in the '
-	                         'current order, and exit. With --sort-key, x values are '
-	                         'pre-filled from the number it captures; edit the order '
-	                         'and values, then pass the file back with --x-map.')
-	parser.add_argument('--sort-key', default=None, metavar='REGEX',
+	                         'current order, and exit. With --sort-key or --order-name, x '
+	                         'values are pre-filled from the number it reads; edit the '
+	                         'order and values, then pass the file back with --x-map.')
+	parser.add_argument('--sort-key', '--order-regex', dest='sort_key', default=None,
+	                    metavar='REGEX',
 	                    help='Order the fits by what this regular expression captures '
 	                         'from each fit name, compared as numbers where they are '
 	                         'numbers: "_([0-9.]+)GPa" sorts by pressure. Fits it does '
 	                         'not match are kept, reported, and put last. The order is '
 	                         'taken as given, not checked.')
+	parser.add_argument('--order-name', default=None, metavar='TEMPLATE',
+	                    help='--sort-key as a wildcard template instead of a regular '
+	                         'expression: * any text, ? one character, # a number, '
+	                         'covering the whole fit name. "*_#GPa*" sorts by pressure, '
+	                         '"#_*" by a leading run number; several #s compare left to '
+	                         'right. A template that fits a name in two ways is refused.')
 	parser.add_argument('--style', default=None, metavar='FILE',
 	                    help='Style sheet to layer on top of the one -u already '
 	                         'selects. Use it for a one-off look -- a journal\'s '
@@ -1592,25 +1599,33 @@ def main():
 	# out of numerical order was never what anyone wanted either.
 	group_names = sorted(file_dicts, key=animate.natural_key)
 
-	if args.x_map and (args.sort_key or args.x_values is not None):
+	if args.x_map and (args.sort_key or args.order_name or args.x_values is not None):
 		print('[!] --x-map sets both the order and the x values, so it cannot be combined '
-		      'with --sort-key or --x-values. Use one or the other.')
+		      'with --sort-key, --order-name or --x-values. Use one or the other.')
+		raise SystemExit(2)
+	if args.sort_key and args.order_name:
+		print('[!] --sort-key and --order-name both set the order: give one of them.')
 		raise SystemExit(2)
 
 	# An explicit order replaces the natural one. Natural sort cannot see that
 	# `0.5GPa` belongs after `0GPa` -- it splits at the point and compares the
 	# pieces -- and no filename convention is universal enough to guess from.
-	if args.sort_key:
+	# --sort-key says it with a regular expression, --order-name with a wildcard.
+	if args.sort_key or args.order_name:
+		flag = '--sort-key' if args.sort_key else '--order-name'
 		try:
-			group_names, unmatched = animate.sort_by_pattern(group_names, args.sort_key)
+			if args.sort_key:
+				group_names, unmatched = animate.sort_by_pattern(group_names, args.sort_key)
+			else:
+				group_names, unmatched = animate.sort_by_template(group_names, args.order_name)
 		except ValueError as e:
-			print(f'[!] --sort-key: {e}')
+			print(f'[!] {flag}: {e}')
 			raise SystemExit(2)
 		if unmatched:
-			print(f'[!] --sort-key matched nothing in {len(unmatched)} fit(s); '
+			print(f'[!] {flag} matched nothing in {len(unmatched)} fit(s); '
 			      f'they are kept and placed last: {", ".join(unmatched)}')
 			group_names = group_names + unmatched
-		print(f'[*] Order from --sort-key: {", ".join(group_names)}')
+		print(f'[*] Order from {flag}: {", ".join(group_names)}')
 
 	# Everything about the run that can be refused is refused here, before any
 	# frame is rendered -- a mistyped value list should cost a second, not the
@@ -1634,10 +1649,13 @@ def main():
 		prefill, source = None, ''
 		if args.sort_key:
 			prefill = animate.first_number(runnable, args.sort_key)
-			if any(v is not None for v in prefill):
-				source = f'the --sort-key pattern {args.sort_key!r}'
-			else:
-				prefill = None
+			source = f'the --sort-key pattern {args.sort_key!r}'
+		elif args.order_name:
+			prefill = [k[0] if k else None
+			           for k in animate.template_numbers(runnable, args.order_name)]
+			source = f'the --order-name template {args.order_name!r}'
+		if prefill is not None and not any(v is not None for v in prefill):
+			prefill, source = None, ''
 		animate.write_x_map_template(args.x_map_template, runnable, prefill, source)
 		filled = sum(v is not None for v in (prefill or []))
 		print(f'[+] {args.x_map_template}  ({len(runnable)} fits'
