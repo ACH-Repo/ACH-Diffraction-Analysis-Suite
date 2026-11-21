@@ -261,6 +261,25 @@ write_style('FLAT', "legend_fontsize = 12\n")
 check('a file without group headers is read the same way',
       applied('FLAT')['legend_fontsize'], 12.0)
 
+# The ways a style "does nothing", each of which now says so -- or just works.
+(_STYLE_DIR / 'BOM.toml').write_bytes(b'\xef\xbb\xbf' + b"legend_fontsize = 13\n")
+check('a sheet saved with a byte-order mark (Notepad) is read, not refused',
+      applied('BOM')['legend_fontsize'], 13.0)
+_commented = write_style('COMMENTED', "# legend_fontsize = 11\n# legend_frame = true\n"
+                                      "# Point size of the legend text.\n")
+check('a setting edited but left behind its # is found',
+      styles.commented_changes('pp', _commented), [('legend_fontsize', '11')])
+check('...but not one still at its built-in value, as the template writes them',
+      [n for n, _v in styles.commented_changes('pp', _commented)], ['legend_fontsize'])
+for _tool in sorted(styles.TOOLS):
+	_tpl_path = Path(_TMP) / f'template-{_tool}.toml'
+	_tpl_path.write_text(styles.template(_tool), encoding='utf-8')
+	check(f'a fresh {_tool} template, every line commented out, raises no such warning',
+	      styles.commented_changes(_tool, _tpl_path), [])
+check('an unknown key gets the likely one suggested',
+      (styles.suggest('heatmap', 'cmap'), 'intensity_scale' in styles.suggest('heatmap', 'scale')),
+      (['colormap'], True))
+
 # A style sheet is decoration: nothing in it may stop a figure being drawn.
 write_style('BAD', "\n".join([
 	"legend_fontsize = 'large'",       # wrong type

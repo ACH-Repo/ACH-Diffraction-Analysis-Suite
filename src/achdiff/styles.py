@@ -46,7 +46,9 @@ Unknown keys and bad values are reported and skipped, never fatal: a style sheet
 is decoration, and a typo in one must not stop a figure being drawn.
 """
 
+import difflib
 import os
+import re
 import shutil
 from collections import namedtuple
 from pathlib import Path
@@ -442,10 +444,14 @@ def _read(path):
 		print(f'    Fix with: pip install tomli')
 		return {}
 	try:
-		with open(path, 'rb') as fh:
-			data = config.tomllib.load(fh)
+		# utf-8-sig: Notepad and others can start the file with a byte-order mark,
+		# which TOML does not allow and nobody can see -- the whole sheet would be
+		# refused over an invisible character.
+		data = config.tomllib.loads(Path(path).read_bytes().decode('utf-8-sig'))
 	except Exception as e:
-		print(f'[!] Ignoring unreadable style {path}: {e}')
+		hint = (" Text goes in quotes -- colormap = 'viridis', not colormap = viridis"
+		        " -- and true and false are lower case." if 'Invalid value' in str(e) else '')
+		print(f'[!] Ignoring unreadable style {path}: {e}.{hint}')
 		return {}
 
 	# Group headers are optional sugar: [axes] exists to make a long file
@@ -465,11 +471,23 @@ def _other_tools_keys(tool, names):
 	        if other != tool and n in BY_NAME[other]}
 
 
+def suggest(tool, name):
+	"""Up to three of `tool`'s keys that `name` was probably meant to be: close in
+	spelling (cmap -> colormap), or containing it (scale -> intensity_scale)."""
+	keys = list(BY_NAME[tool])
+	close = difflib.get_close_matches(name, keys, n=3, cutoff=0.6)
+	return (close + [k for k in keys if name in k and k not in close])[:3]
+
+
 def report_unknown(tool, label, names):
 	belongs = _other_tools_keys(tool, names)
 	strays = sorted(n for n in names if n not in belongs)
 	if strays:
 		print(f'[!] {label}: ignoring unknown setting(s) {", ".join(strays)}.')
+		for name in strays:
+			meant = suggest(tool, name)
+			if meant:
+				print(f'    {name}: did you mean {" or ".join(meant)}?')
 		print(f'    `achdiff style init {tool}` writes a file listing every setting there is.')
 	for other in sorted(set(belongs.values())):
 		mine = sorted(n for n, t in belongs.items() if t == other)
@@ -499,6 +517,44 @@ def validate(tool, path):
 			continue
 		good.append(name)
 	return good, unknown, invalid
+
+
+_COMMENTED_SETTING = re.compile(r'^\s*#\s*([A-Za-z_]\w*)\s*=\s*(\S.*?)\s*$')
+
+
+def commented_changes(tool, path):
+	"""(name, value as written) for each setting in `path` that is commented out
+	with a value other than the built-in one.
+
+	`achdiff style init` writes every setting commented out at its built-in
+	value, so a line like `# colormap = 'viridis'` was edited and then left
+	behind its #. It does nothing, and nothing else would say so: the commonest
+	way a style sheet "is ignored"."""
+	try:
+		lines = Path(path).read_bytes().decode('utf-8-sig').splitlines()
+	except (OSError, UnicodeDecodeError):
+		return []
+	defaults, found = None, []
+	for line in lines:
+		m = _COMMENTED_SETTING.match(line)
+		key = BY_NAME[tool].get(m.group(1)) if m else None
+		if key is None:
+			continue
+		if defaults is None:
+			defaults = live_settings(tool)
+		try:
+			value = _coerce(key, config.tomllib.loads(f'v = {m.group(2)}')['v'])
+		except Exception:
+			found.append((m.group(1), m.group(2)))    # not even valid: not the template's
+			continue
+		default = defaults.get(key.target)
+		if isinstance(default, (list, tuple)) and isinstance(value, (list, tuple)):
+			same = list(default) == list(value)
+		else:
+			same = value == default
+		if not same:
+			found.append((m.group(1), m.group(2)))
+	return found
 
 
 def _apply_one(tool, target, path, seen_unknown):
@@ -590,6 +646,9 @@ def apply(tool, target, user=None, explicit=None):
 				f'    `achdiff style list {tool}` shows the styles on this machine.')
 		if _apply_one(tool, target, path, unknown):
 			used.append(path)
+		for name, value in commented_changes(tool, path):
+			print(f'[!] {_describe(path)}: {name} = {value} is commented out, so it does '
+			      f'nothing. Delete the # at the start of its line to use it.')
 
 	for path, names in unknown.items():
 		report_unknown(tool, path.name, names)

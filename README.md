@@ -212,7 +212,10 @@ achdiff style list                    # confirm it landed
 `init` writes `%APPDATA%\ach-diffraction\styles\pp\CN.toml` with every setting at
 the value currently in effect, each one commented out and explained. Uncomment
 what you want to own; anything left commented keeps following the built-in, so
-a later release can improve a default you never asked about.
+a later release can improve a default you never asked about. Delete the `#` as
+well as changing the value: a changed value still behind its `#` does nothing,
+and the plotters point it out when they run — as they do a misspelt key
+(`cmap: did you mean colormap?`) and text without its quotes.
 
 ```toml
 [axes]
