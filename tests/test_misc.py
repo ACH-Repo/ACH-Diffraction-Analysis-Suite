@@ -215,22 +215,45 @@ check('kit.values speaks pp --x-values, stop included',
 check('kit.natural_key puts scan_2 before scan_10',
       sorted(['scan_10', 'scan_2'], key=kit.natural_key), ['scan_2', 'scan_10'])
 
+# Wildcard templates: * any text, ? one character, # the number, over the whole name.
+_gh = ['00_GH077a_27_750_11112026_1bar_001_00000.xy', '17_GH077a_27_750_11112026_1700bar_001_00000.xy']
+check('a template reads the number at its #', kit.template_numbers(_gh, '*_#bar_*'),
+      [(1.0,), (1700.0,)])
+check('...a whole number, never its tail', kit.template_numbers(_gh, '*#bar*'), [(1.0,), (1700.0,)])
+check('...in any case', kit.template_numbers(_gh, '*_#BAR_*'), [(1.0,), (1700.0,)])
+check('...decimals with a point or a comma', kit.template_numbers(['a_2.5GPa.xy', 'a_0,5GPa.xy'],
+                                                                    '*_#GPa.xy'), [(2.5,), (0.5,)])
+check('...several #s at once', kit.template_numbers(['T300_run2.xy'], 'T#_run#.xy'), [(300.0, 2.0)])
+check('a template covers the whole name, as a wildcard does',
+      kit.template_numbers(_gh, '#bar'), [None, None])
+_err = None
+try:
+	kit.template_numbers(_gh, '*_#_*')
+except ValueError as e:
+	_err = str(e)
+check('a template that fits a name two ways is refused, naming both readings',
+      _err is not None and '27' in _err and '001' in _err and _gh[0] in _err, True)
+check('kit.sort_by_pattern is pp --sort-key',
+      kit.sort_by_pattern(['x_run10', 'x_run9', 'other'], r'run(\d+)'),
+      (['x_run9', 'x_run10'], ['other']))
+
 
 # ---------- heatmap ----------
 # Synthetic patterns only: measured data stays out of a public repository.
-def write_series(folder, pressures, zeros=0, shift=0.0):
+def write_series(folder, pressures, zeros=0, shift=0.0, numbers=None,
+                 name='{n:02d}_GH000_650_24062026_{p:g}bar_001.xy'):
 	"""One .xy per pressure: a peak at 5 deg (moving by `shift` per bar) and one at
-	9, on a flat background; the last `zeros` points zero, like a masked detector."""
+	9, on a flat background; the last `zeros` points zero, like a masked detector.
+	`numbers` are the measurement numbers in the names (default 0, 1, 2 ...)."""
 	folder = Path(folder)
 	folder.mkdir(parents=True, exist_ok=True)
 	x = np.round(np.arange(1.0, 20.0, 0.01), 4)
-	for k, p in enumerate(pressures):
+	for n, p in zip(numbers or range(len(pressures)), pressures):
 		y = (50 + 1000 * np.exp(-0.5 * ((x - 5.0 - shift * p) / 0.03) ** 2)
 		     + 300 * np.exp(-0.5 * ((x - 9.0) / 0.03) ** 2))
 		if zeros:
 			y[-zeros:] = 0.0
-		np.savetxt(folder / f'{k:02d}_GH000_650_24062026_{p:g}bar_001.xy',
-		           np.column_stack([x, y]), fmt='%.6f')
+		np.savetxt(folder / name.format(n=n, p=p), np.column_stack([x, y]), fmt='%.6f')
 	return folder
 
 
@@ -251,9 +274,9 @@ check('a temperature series labels T', heatmap.axis_label(heatmap.from_units(
 	['r_300K.xy', 'r_350K.xy'])[1]), '$T$ / K')
 check('names without a unit give nothing', heatmap.from_units(['a.xy', 'b.xy']), (None, None))
 
-_pairs, _label = heatmap.series(['s_1000bar.xy', 's_200bar.xy', 's_1bar.xy'])
-check('the map goes by value, not by name', [v for v, _p in _pairs], [1.0, 200.0, 1000.0])
-check('...and the unit labels the axis as the paper does', _label, '$p$ / bar')
+_s = heatmap.series(['s_1000bar.xy', 's_200bar.xy', 's_1bar.xy'])
+check('values come from the number before a unit, and label the axis as the paper does',
+      (sorted(_s.values), _s.label, _s.unit), ([1.0, 200.0, 1000.0], '$p$ / bar', 'bar'))
 
 
 def refused(fn, *a, **kw):
@@ -272,26 +295,87 @@ check('two patterns at one value are refused: a return leg is its own map',
       True)
 check('--y-values must give one value per pattern, and lists the order it uses',
       (refused(heatmap.series, ['a.xy', 'b.xy', 'c.xy'], y_values=[1.0, 2.0]) or '').count('.xy'), 3)
-_pairs, _label = heatmap.series(['scan_10.xy', 'scan_2.xy'], y_values=[5.0, 7.0])
-check('--y-values go to the files in natural name order',
-      [(v, p) for v, p in _pairs], [(5.0, 'scan_2.xy'), (7.0, 'scan_10.xy')])
-check('...with no unit to label the axis', _label, '')
-_pairs, _label = heatmap.series(['s_x3_10bar.xy', 's_x1_20bar.xy'], sort_key=r'_x(\d+)_')
-check('--sort-key takes its first capture group', [v for v, _p in _pairs], [1.0, 3.0])
-check('...and keeps the unit off the axis when it took other numbers', _label, '')
-_pairs, _label = heatmap.series(['a.xy', 'b.xy', 'c.xy'])
-check('names with no values are numbered', ([v for v, _p in _pairs], _label),
-      ([1.0, 2.0, 3.0], 'pattern'))
+_s = heatmap.series(['scan_10.xy', 'scan_2.xy'], y_values=[5.0, 7.0])
+check('--y-values go to the files in measurement order, here the order names sort in',
+      list(zip(_s.values, _s.paths)), [(5.0, 'scan_2.xy'), (7.0, 'scan_10.xy')])
+check('...with no unit to label the axis', _s.label, '')
+_s = heatmap.series(['a.xy', 'b.xy', 'c.xy'])
+check('names with no values are numbered', (_s.values, _s.label), ([1.0, 2.0, 3.0], 'pattern'))
 
-# Stacked bands: every row is the pattern nearest to it.
-_c, _lo, _up, _w = heatmap.rows([0, 100, 300], 300)
-check('each band reaches half way to its neighbours; the ends are half bands',
-      np.bincount(_lo).tolist(), [50, 150, 100])
-check('--smooth blends the two patterns either side, in proportion',
-      heatmap.image(np.array([[0.0], [8.0]]), [0, 100], smooth=True, n_rows=4).ravel().tolist(),
-      [1.0, 3.0, 5.0, 7.0])
-check('the series axis gets the paper\'s ticks: 1, 2000, 4000',
-      heatmap.series_ticks(1, 4000), ([1.0, 2000.0, 4000.0], 1000.0))
+# Where the value is: a wildcard template or a regex.
+_names = ['p0001_s-a.xy', 'p0250_s-b.xy']
+check('--y-name reads the value at its #', heatmap.series(_names, y_name='p#_*').values,
+      [1.0, 250.0])
+check('--y-regex reads its first group', heatmap.series(_names, y_regex=r'p(\d+)_').values,
+      [1.0, 250.0])
+check('--y-name needs exactly one #', 'exactly one #' in (refused(
+	heatmap.series, _names, y_name='p#_s-#.xy') or ''), True)
+check('a template that misses a name says which, and how templates work',
+      'p0250_s-b.xy' in (refused(heatmap.series, _names, y_name='p#_s-a.xy') or ''), True)
+check('...and one that fits two ways is refused', 'more than one way' in (refused(
+	heatmap.series, ['GH077a_27_750_1bar.xy'], y_name='*_#_*') or ''), True)
+check('a value from a template keeps the unit off the axis', heatmap.series(
+	['s_1bar_x2.xy', 's_2bar_x1.xy'], y_name='*_x#.xy').label, '')
+
+# The measurement order: the order names sort in, a template, or a regex.
+_runs = ['b_run1_100bar.xy', 'a_run2_200bar.xy', 'c_run10_300bar.xy']
+check('by default, the order the names sort in',
+      heatmap.measurement_order(_runs)[0], ['a_run2_200bar.xy', 'b_run1_100bar.xy',
+                                             'c_run10_300bar.xy'])
+check('--order-name takes it from the # instead',
+      heatmap.measurement_order(_runs, template='*_run#_*')[0],
+      ['b_run1_100bar.xy', 'a_run2_200bar.xy', 'c_run10_300bar.xy'])
+check('--order-regex (pp\'s --sort-key) does the same with a regex',
+      heatmap.measurement_order(_runs, regex=r'run(\d+)')[0],
+      ['b_run1_100bar.xy', 'a_run2_200bar.xy', 'c_run10_300bar.xy'])
+check('...and refuses names it does not match', 'other.xy' in (refused(
+	heatmap.measurement_order, _runs + ['other.xy'], regex=r'run(\d+)') or ''), True)
+check('--y-values follow the measurement order given',
+      heatmap.series(_runs, y_values=[1.0, 2.0, 3.0], order_name='*_run#_*').paths[0],
+      'b_run1_100bar.xy')
+check('leading numbers are kept, to spot a measurement that is not there',
+      heatmap.measurement_order(['00_a.xy', '01_a.xy', '03_a.xy'])[2], [0.0, 1.0, 3.0])
+check('...which is a gap in a run of whole numbers', heatmap.sequence_gaps([0, 1, 2, 5]), [3, 4])
+check('...and nothing when the numbers are no run',
+      (heatmap.sequence_gaps([0.5, 1.5]), heatmap.sequence_gaps([1, 100])), ([], []))
+
+# Steps: the grid the series was measured on, and what has no pattern.
+check('1, 100, 200 ... is a series in steps of 100, the first at ambient',
+      heatmap.nominal_step([1, 100, 200, 300, 500]), (100.0, 0.0))
+check('a grid that does not pass through zero runs through the first value',
+      heatmap.nominal_step([5, 15, 25]), (10.0, 5.0))
+check('a series with no clear step has none', heatmap.nominal_step([0, 0.5, 1, 2, 4]), None)
+check('--step that the values do not fit is refused',
+      'do not sit one to a step' in (refused(heatmap.nominal_step, [0, 100, 250], 100) or ''), True)
+_steps, _grid = heatmap.plan_steps([1, 100, 200, 300, 500, 600, 1000])
+check('every step of the grid is a band, measured or not',
+      [(s.centre, s.kind) for s in _steps if s.kind != 'measured'],
+      [(400.0, 'missing'), (700.0, 'missing'), (800.0, 'missing'), (900.0, 'missing')])
+_steps, _grid = heatmap.plan_steps([1, 100, 200, 300, 500, 600, 1000], fill=True)
+check('--fill blends the measured steps either side, by distance',
+      [s.mix for s in _steps if s.centre == 700.0], [((5, 0.75), (6, 0.25))])
+check('off any grid each pattern is its own band',
+      [s.kind for s in heatmap.plan_steps([0, 0.5, 1, 2, 4])[0]], ['measured'] * 5)
+check('bands reach half way to the next step, and as far beyond the ends',
+      heatmap.bands(heatmap.plan_steps([0, 100, 200])[0]), [(-50.0, 50.0), (50.0, 150.0),
+                                                            (150.0, 250.0)])
+
+# The image: each band is its pattern repeated; a step with no pattern is NaN.
+_Z = np.array([[0.0], [8.0]])
+_two = heatmap.plan_steps([0, 100])[0]
+check('stacked, each row is the nearest step',
+      heatmap.image(_Z, _two, -50, 150, n_rows=4).ravel().tolist(), [0.0, 0.0, 8.0, 8.0])
+check('--smooth blends the steps either side, in proportion',
+      heatmap.image(_Z, _two, 0, 100, smooth=True, n_rows=4).ravel().tolist(), [1.0, 3.0, 5.0, 7.0])
+_gap = heatmap.plan_steps([0, 200], step=100)[0]
+_rows = heatmap.image(_Z, _gap, -50, 250, n_rows=6).ravel().tolist()
+check('a step without a pattern stays empty', [np.isnan(r) for r in _rows],
+      [False, False, True, True, False, False])
+_rows = heatmap.image(_Z, _gap, -50, 250, smooth=True, n_rows=6).ravel().tolist()
+check('...smooth too: nothing is blended across it', [np.isnan(r) for r in _rows],
+      [False, False, True, True, False, False])
+check('the series axis gets the paper\'s ticks: 1, 2000, 4000, minors between',
+      heatmap.series_ticks(1, 4000, -50, 4050), ([1.0, 2000.0, 4000.0], [1000.0, 3000.0]))
 
 _x1 = np.linspace(1, 10, 91)
 _x2 = np.linspace(2, 12, 51)
@@ -332,6 +416,38 @@ check('a run on a folder of patterns succeeds', _code, 0)
 check('...draws every pattern in the folder', '5 patterns from 1 to 400 bar' in _text, True)
 check('...leaves the zeroed detector edge out', 'left out' in _text, True)
 check('...and writes the figure', (_w4 / 'heatmap.png').is_file(), True)
+_notes = (_w4 / 'heatmap_SI.txt').read_text(encoding='utf-8') if (_w4 / 'heatmap_SI.txt').is_file() else ''
+check('...with SI notes beside it, saying how the map was made',
+      ('For the supporting information' in _notes, 'nominal steps of 100 bar' in _notes,
+       'Stretching' in _notes), (True, True, True))
+
+# A series with gaps, as measured: no 400 bar, and numbers 6 and 7 missing.
+_w7 = write_series(tempfile.mkdtemp(), [1, 100, 200, 300, 500, 600, 1000],
+                   numbers=[0, 1, 2, 3, 4, 5, 8])
+os.chdir(_w7)
+try:
+	_code, _text = quiet(heatmap.main, ['-s', '-x', 'png', '--name', 'gaps'], command=['heatmap'])
+	_code_f, _text_f = quiet(heatmap.main, ['-s', '-x', 'png', '--fill', '--name', 'filled'],
+	                         command=['heatmap'])
+	_code_a, _text_a = quiet(heatmap.main, ['--y-name', '*_#_*', '-s'], command=['heatmap'])
+finally:
+	os.chdir(_cwd)
+
+def notes_text(path):
+	"""The SI notes with their line wrapping undone, to search for phrases."""
+	return ' '.join(path.read_text(encoding='utf-8').split()) if path.is_file() else ''
+
+
+_gaps, _filled = notes_text(_w7 / 'gaps_SI.txt'), notes_text(_w7 / 'filled_SI.txt')
+check('steps without a pattern are named, and hatched',
+      (_code, 'No pattern at 400, 700, 800 and 900 bar: hatched' in _text), (0, True))
+check('...and the SI notes say so, and that numbers 6 and 7 are not there',
+      ('these steps are shown hatched' in _gaps, 'without 6 and 7' in _gaps), (True, True))
+check('--fill interpolates them, and the notes give the weights',
+      (_code_f, 'interpolated: 0.75 x 600 + 0.25 x 1000' in _filled,
+       'filled by linear interpolation' in _filled), (0, True, True))
+check('a template that fits the names two ways stops the run, saying so',
+      (_code_a, 'more than one way' in _text_a), (1, True))
 _rec = next(_w4.glob('run*.bat'), None) or next(_w4.glob('run*.sh'), None)
 check('-d records it as an achdiff misc run command',
       _rec is not None and 'achdiff misc run heatmap -s -x png --label' in _rec.read_text(), True)
@@ -352,9 +468,9 @@ check('one pattern is not a map, and it says so',
 check('an unknown colormap stops it before anything is read',
       (_code_cmap, 'no colormap called' in _text_cmap), (1, True))
 
-# The wizard, run bare in a console: Enter takes every pattern and the values
-# from the names, no range, then a label, then save.
-_answers = iter(['', '', '', 'Mg$_2$(dobdc)', 'y'])
+# The wizard, run bare in a console: Enter takes every pattern, their order and
+# the values from the names, no range, then a label, then save.
+_answers = iter(['', '', '', '', 'Mg$_2$(dobdc)', 'y'])
 kit.interactive = lambda: True
 builtins.input = lambda prompt='': next(_answers)
 _w5 = write_series(tempfile.mkdtemp(), [1, 250, 500])
@@ -370,6 +486,29 @@ check('...shows the values it read from the names', '1, 250, 500 bar (3 values)'
 check('...prints the command that skips it next time, with a wildcard',
       'achdiff misc run heatmap -i *.xy --label "Mg$_2$(dobdc)" -s' in _text, True)
 check('...having saved the figure', (_w5 / 'heatmap.svg').is_file(), True)
+
+# Names that sort out of order and carry no unit: the wizard asks for templates.
+_w8 = Path(tempfile.mkdtemp())
+_x = np.arange(1.0, 20.0, 0.01)
+for _stem, _p in (('b_run1', 100), ('a_run2', 200), ('c_run3', 300)):
+	np.savetxt(_w8 / f'{_stem}_p{_p}.xy',
+	           np.column_stack([_x, 50 + 1000 * np.exp(-0.5 * ((_x - 5) / 0.03) ** 2)]))
+_answers = iter(['', 'n', '*_run#_*', '*_p#.xy', '$p$ / MPa', '', '', 'y'])
+kit.interactive = lambda: True
+builtins.input = lambda prompt='': next(_answers)
+os.chdir(_w8)
+try:
+	_code, _text = quiet(heatmap.main, [], command=['achdiff', 'misc', 'run', 'heatmap'])
+finally:
+	os.chdir(_cwd)
+	builtins.input = _real_input
+	kit.interactive = _real_interactive
+check('the wizard takes the order and the values as templates',
+      (_code, 'achdiff misc run heatmap -i *.xy --order-name *_run#_* --y-name *_p#.xy '
+              '--y-label "$p$ / MPa" -s' in _text), (0, True))
+check('...showing what each template reads before taking it',
+      ('In that order: b_run1_p100.xy' in _text, 'Reads 100, 200, 300 (3 values)' in _text),
+      (True, True))
 
 # Given any argument it runs straight through, asking nothing.
 kit.interactive = lambda: True

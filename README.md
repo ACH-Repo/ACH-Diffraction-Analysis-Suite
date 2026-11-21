@@ -830,21 +830,50 @@ achdiff misc run heatmap                                    # in a folder of pat
 achdiff misc run heatmap -i *.xy --range 1.5 12 --label "Mg$_2$(dobdc)" -s
 ```
 
-- **Stacked, not interpolated.** Each pattern is a horizontal band centred on its
-  own value and reaching half way to its neighbours, so every row of the map is
-  the pattern measured nearest to it, and uneven steps (1, 100, 200 … bar) keep
-  their true heights. The vertical stretch is only the shape of the axes: forty
-  patterns in a panel four times as wide as it is tall already look continuous.
-  `--smooth` blends linearly between neighbouring patterns instead. That hides
-  the steps, but it also turns a jump between two patterns into what looks like
-  a gradual change.
-- **Values come from the file names**: the number before a unit (`_1bar_`,
-  `2.5GPa`, `300K`), which also labels the axis (*p* / bar). Sample codes and
-  dates in the name are passed over, and so is a unit whose number never changes
-  (a constant `25C` in a pressure series). `--sort-key REGEX` takes another
-  number, as in `pp`; `--y-values 1,100:4000:100` gives them yourself, in
-  file-name order. Two patterns at one value are refused — a run that comes back
-  down needs one map per leg.
+- **Stacked, not interpolated.** A series measured in regular steps (1, 100,
+  200 … bar) gets one band per step: each pattern covers half a step either side
+  of its value, so forty patterns fill a 4000 bar axis without a single
+  invented row. The axis runs half a step past the first and last patterns, so
+  they get whole bands too. Off any regular grid, each pattern reaches half way
+  to its neighbours. `--smooth` blends between neighbouring steps instead; that
+  hides the steps, but also turns a jump between two patterns into what looks
+  like a gradual change.
+- **Missing steps** — no pattern at 3400 bar, say — are found from the step the
+  series was measured in (the commonest spacing of the values; `--step 100` to
+  say it yourself) and **hatched** grey. `--fill` fills them instead, by linear
+  interpolation between the measured steps either side, weighted by distance.
+- **The SI notes.** `-s` writes `NAME_SI.txt` beside the figure: a paragraph for
+  the supporting information, then the numbers — which pressures were measured
+  and which filled or hatched, how far each pattern is stretched (one step of
+  the axis; so many image rows; so many pixels in the saved figure), the colour
+  scale, the 2θ range, and every file in measurement order with the band it is
+  drawn in. A map of forty patterns that looks continuous is stretched, and this
+  says by how much.
+- **Values and order come from the file names**, by wildcard or by regex:
+
+  | | wildcard template | regular expression |
+  |---|---|---|
+  | the value | `--y-name "*_#bar_*"` | `--y-regex "_(\d+)bar_"` |
+  | the measurement order | `--order-name "#_*"` | `--order-regex "^(\d+)_"` |
+
+  In a template `*` is any text, `?` one character and `#` the number (1700, 2.5,
+  0,5); it covers the whole name, as `dir *.xy` does, in any case. A template
+  that fits a name in two ways is refused, naming both readings — `*_#_*` finds
+  27 and 001 in `00_GH077a_27_750_11112026_1bar_001_00000.xy` — so a wildcard
+  never quietly takes the wrong number. Several `#`s in `--order-name` are
+  compared left to right, as are the groups of `--order-regex`, which is `pp`'s
+  `--sort-key` (and takes that name too).
+
+  Without either, the value is the number before a unit (`_1bar_`, `2.5GPa`,
+  `300K`), which also labels the axis (*p* / bar) — sample codes and dates are
+  passed over, and so is a unit whose number never changes (a constant `25C` in a
+  pressure series) — and the order is the order the names sort in, which a
+  leading `00_`, `01_` … makes the measurement order. `--y-values
+  1,100:4000:100` gives the values yourself, in measurement order. Two patterns
+  at one value are refused: a run that comes back down needs one map per leg.
+
+  > Before 0.18.0 `heatmap --sort-key` gave the value. It now gives the order,
+  > as it does in `pp`; the value regex is `--y-regex`.
 - **Colours**: `--cmap` takes any matplotlib colormap (`viridis`, `Blues_r`),
   part of one (`PuBu:0.28:1`), or colours to blend (`white,#08306b`). The default
   is the paper's, measured off the published figure: ColorBrewer PuBu without its

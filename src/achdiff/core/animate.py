@@ -141,6 +141,75 @@ def sort_by_pattern(names, pattern):
 	return ordered, unmatched
 
 
+# What `#` stands for in a name template: a whole number, with a decimal point or
+# comma if it has one, and never the tail or the head of a longer number -- so
+# `*#bar*` reads 1700 from `_1700bar`, not 0.
+_TEMPLATE_NUMBER = r'(?<![\d.,])(\d+(?:[.,]\d+)?)(?!\d)'
+
+
+def template_regex(template, greedy=False):
+	"""A file-name template as a regular expression, for people who write `dir *.xy`
+	but not regular expressions.
+
+	    *   any run of characters, also none
+	    ?   any one character
+	    #   a number, which is captured: 1700, 2.5 or 0,5
+	    everything else stands for itself, in any case
+
+	The template covers the whole name, as a wildcard does: `*_#bar_*` fits
+	`00_GH077a_27_750_11112026_1700bar_001_00000.xy`, `#bar` fits only a name that
+	is nothing more than that. `greedy` lets every `*` take as much as it can
+	instead of as little, which is how `template_numbers` notices a template that
+	fits a name in more than one way. Raises ValueError for a template without a #.
+	"""
+	if '#' not in template:
+		raise ValueError(f'{template!r} has no # to say where the number is '
+		                 f'(e.g. *_#bar_*)')
+	parts = []
+	for ch in template:
+		if ch == '*':
+			parts.append('.*' if greedy else '.*?')
+		elif ch == '?':
+			parts.append('.')
+		elif ch == '#':
+			parts.append(_TEMPLATE_NUMBER)
+		else:
+			parts.append(re.escape(ch))
+	return re.compile(''.join(parts), re.IGNORECASE | re.DOTALL)
+
+
+def _number(text):
+	key = _sortable(text)
+	return key[1] if key[0] == 0 else None
+
+
+def template_numbers(names, template):
+	"""What each `#` of `template` stands for in each name: `[(float, ...) or None]`.
+
+	None for a name the template does not fit. Raises ValueError for a template
+	with no #, and for one that fits a name in more than one way -- `*_#_*` finds
+	27, 750 and more in `GH077a_27_750_11112026_1bar` -- naming the file and two of
+	the readings. A wildcard that quietly took the first would put every pattern
+	at the wrong value without a word, which is the pitfall wildcards have and
+	regular expressions do not.
+	"""
+	lazy, greedy = template_regex(template), template_regex(template, greedy=True)
+	found = []
+	for name in names:
+		first, last = lazy.fullmatch(str(name)), greedy.fullmatch(str(name))
+		if first is None:
+			found.append(None)
+			continue
+		numbers = tuple(_number(g) for g in first.groups())
+		if numbers != tuple(_number(g) for g in last.groups()):
+			raise ValueError(
+				f'{template!r} fits {name} in more than one way: # could be '
+				f'{" ".join(first.groups())} or {" ".join(last.groups())}. Write more of '
+				f'the text around it, e.g. *_#bar_* rather than *_#_*.')
+		found.append(numbers)
+	return found
+
+
 def parse_x_values(spec):
 	"""The x values for a series, from a list and/or ranges: `[float, ...]`.
 

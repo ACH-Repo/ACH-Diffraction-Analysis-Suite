@@ -26,6 +26,10 @@ Reading measured patterns
 Series
     values(spec)      "1,100:900:100" -> [1.0, 100.0, ..., 900.0], as pp --x-values
     natural_key(text) a sort key that puts scan_2 before scan_10
+    template_numbers(names, template)
+                      the numbers at the #s of a wildcard template: *_#bar_*
+    sort_by_pattern(names, regex)
+                      names ordered by a regex's capture groups, as pp --sort-key
 
 Asking (so a script run with no arguments explains itself)
     interactive()     whether anyone is there to answer
@@ -34,6 +38,7 @@ Asking (so a script run with no arguments explains itself)
 Running
     add_common_arguments(parser)   -s, -x and -d, as every tool spells them
     main(parser, fill, run, ...)   the shape of every script's main()
+    SUITE_VERSION                  the installed suite's version, e.g. '0.18.0'
 """
 
 import os
@@ -41,12 +46,15 @@ import re
 import sys
 from pathlib import Path
 
+from achdiff import __version__ as _version
 from achdiff import document
 from achdiff.core import readers as _readers
 from achdiff.core import topas as _topas
 from achdiff.core.animate import natural_key as _natural_key
 from achdiff.core.animate import parse_value_error as _parse_value_error
 from achdiff.core.animate import parse_x_values as _parse_x_values
+from achdiff.core.animate import sort_by_pattern as _sort_by_pattern
+from achdiff.core.animate import template_numbers as _template_numbers
 from achdiff.core.rounding import cryst_round as _cryst_round
 
 
@@ -82,6 +90,10 @@ def rounded(token):
 	return text if text is not None else str(token)
 
 
+#: The suite's version, for a script that writes down how its output was made.
+SUITE_VERSION = _version
+
+
 # ------------------------------------------------------------ measured patterns
 
 #: The suffixes pattern() reads, lower case with the dot.
@@ -107,6 +119,23 @@ def values(spec):
 def natural_key(text):
 	"""Sort key that puts scan_2 before scan_10."""
 	return _natural_key(text)
+
+
+def template_numbers(names, template):
+	"""The numbers a wildcard template finds in each name: [(float, ...) or None].
+
+	In the template * is any text, ? any one character and # a number; it covers
+	the whole name, in any case: *_#bar_* reads 1700 from ..._1700bar_001.xy. None
+	for a name it does not fit. Raises ValueError for a template without a #, and
+	for one that fits a name in more than one way (*_#_*), naming the file."""
+	return _template_numbers(names, template)
+
+
+def sort_by_pattern(names, regex):
+	"""(ordered, unmatched): names ordered by what `regex` captures, groups compared
+	left to right, as numbers where they are numbers -- pp --sort-key exactly.
+	Raises ValueError for a regex that will not compile."""
+	return _sort_by_pattern(names, regex)
 
 
 # ---------------------------------------------------------------------- asking
@@ -217,8 +246,9 @@ def main(parser, fill, run, argv=None, command=None, script_file=None):
 	Parses `argv`. Then `fill(args, parser)` may ask for whatever is missing; its
 	answers come back as command-line tokens and are parsed exactly like typed
 	ones, and the command that would have skipped the questions is printed --
-	which is how a wizard teaches its own command line. -d records that command.
-	Finally `run(args)`, whose return value is the exit code.
+	which is how a wizard teaches its own command line. -d records that command,
+	and `args.typed_command` carries it as one line. Finally `run(args)`, whose
+	return value is the exit code.
 
 	`command` is how the script was started (`achdiff misc run NAME`); a copy
 	run on its own passes its `__file__` as `script_file` instead.
@@ -233,11 +263,14 @@ def main(parser, fill, run, argv=None, command=None, script_file=None):
 	if extra:
 		argv = argv + extra
 		args = parser.parse_args(argv)
+	typed = ' '.join(command + [_shown(a) for a in document.without_document_flag(parser, argv)])
+	if extra:
 		print()
 		print('[*] Next time, skip the questions:')
-		print('      ' + ' '.join(command + [_shown(a) for a in
-		                                    document.without_document_flag(parser, argv)]))
+		print('      ' + typed)
 		print()
+	# For a script that writes down how its output was made.
+	args.typed_command = typed
 
 	if getattr(args, 'document', False):
 		document.write_run_file(parser, command[0], None, argv=argv, command=command,
