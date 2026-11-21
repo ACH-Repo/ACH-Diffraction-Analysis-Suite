@@ -12,7 +12,8 @@ Layering matches the rest of the suite, so there is one precedence rule to learn
 
     --style FILE  >  ACH_STYLE_PP  >  styles/pp/<ID>.toml  >  styles/pp/default.toml  >  built-in
 
-(and the same with PQ / pq for quickplot).
+(and the same with PQ / pq for quickplot, and HEATMAP / heatmap for the misc
+script that draws a pattern series as a heat map).
 
 Why each plotter has its own sheets
 -----------------------------------
@@ -57,6 +58,9 @@ from . import config
 TOOLS = {
 	'pp': 'achdiff.tools.plotter',
 	'pq': 'achdiff.tools.quickplot',
+	# A misc script, but a plotter all the same, and one whose figures go into
+	# papers: ticks, fonts and sizes belong in a sheet, not in an edited copy.
+	'heatmap': 'achdiff.misc.scripts.heatmap',
 }
 
 # ACH_STYLE predates the split and meant pp's sheet; it still does.
@@ -217,7 +221,70 @@ _PQ_SCHEMA = [
 	_OVERLAY_GROUP,
 ]
 
-SCHEMAS = {'pp': _PP_SCHEMA, 'pq': _PQ_SCHEMA}
+_HEATMAP_SCHEMA = [
+	('figure', 'Canvas and output.', [
+		Key('figsize', 'figsize', 'size2',
+		    'Width and height in inches. --size overrides it for one plot.'),
+		Key('dpi', 'dpi', 'int',
+		    'Resolution of a saved PNG, and of the map inside an SVG or PDF, whose '
+		    'text and frame stay vector. --dpi overrides it.'),
+		Key('transparent', 'transparent', 'bool',
+		    'Save with a transparent background instead of white.'),
+		Key('extension', 'extension', 'str',
+		    'Default output format for -s. The -x flag still overrides this.'),
+		Key('font', 'font', 'str',
+		    "Typeface of every text in the figure, mathtext included: 'Arial', "
+		    "'Helvetica', 'Times New Roman'. Arial stands in when it is not installed."),
+	]),
+	('axes', 'Tick furniture and text sizes. The axis labels themselves follow the '
+	         'data -- 2theta or Q across, the unit in the file names up -- and --x-label '
+	         'and --y-label change them for one plot.', [
+		Key('axis_label_size', 'size_axis_labels', 'float',
+		    'Point size of both axis labels.'),
+		Key('tick_label_size', 'size_tick_labels', 'float',
+		    'Point size of the numbers along both axes.'),
+		Key('x_tick_step', 'x_tick_step', 'float',
+		    'Distance between numbered x ticks, in the units of the axis (degrees, or '
+		    '1/angstrom for Q). 0 leaves the spacing to matplotlib.'),
+		Key('tick_direction', 'tick_direction', 'choice:in,out,inout',
+		    'Whether ticks point into the plot, out of it, or both.'),
+		Key('ticks_top', 'ticks_top', 'bool',
+		    'Mirror the x ticks onto the top edge of the frame.'),
+		Key('ticks_right', 'ticks_right', 'bool',
+		    'Mirror the pressure ticks onto the right edge of the frame.'),
+		Key('tick_length_major', 'tick_length_major', 'float',
+		    'Length in points of the numbered ticks.'),
+		Key('tick_length_minor', 'tick_length_minor', 'float',
+		    'Length in points of the unnumbered ticks between them.'),
+		Key('tick_width', 'tick_width', 'float',
+		    'Stroke weight of the ticks, in points.'),
+		Key('minor_ticks', 'minor_ticks', 'bool',
+		    'Draw the unnumbered ticks between the numbered ones.'),
+		Key('frame_width', 'frame_width', 'float',
+		    'Stroke weight of the frame around the plot, in points.'),
+	]),
+	('colours', 'The map itself. --cmap, --scale and --colorbar override these for '
+	            'one plot.', [
+		Key('colormap', 'colormap', 'str',
+		    "Any matplotlib colormap ('viridis', 'Blues_r'), part of one "
+		    "('PuBu:0.28:1'), or colours to blend ('white,#08306b')."),
+		Key('intensity_scale', 'intensity_scale', 'choice:linear,sqrt,log',
+		    'How intensity maps to colour: sqrt shows weak peaks beside strong ones, '
+		    'linear keeps colour proportional to intensity, log lifts the weakest.'),
+		Key('colorbar', 'colorbar', 'bool',
+		    'Draw a colour bar beside the map.'),
+		Key('gap_color', 'gap_color', 'color',
+		    'Hatching over a step of the series that has no pattern.'),
+		Key('gap_fill', 'gap_fill', 'color',
+		    'Behind that hatching -- all that shows when the band is too thin for it.'),
+	]),
+	('annotations', 'Text inside the plot, drawn only when asked for.', [
+		Key('label_size', 'label_size', 'float',
+		    'Point size of the --label text in the top right corner.'),
+	]),
+]
+
+SCHEMAS = {'pp': _PP_SCHEMA, 'pq': _PQ_SCHEMA, 'heatmap': _HEATMAP_SCHEMA}
 BY_NAME = {tool: {key.name: key for group in schema for key in group[2]}
            for tool, schema in SCHEMAS.items()}
 
@@ -597,7 +664,7 @@ def template(tool, user=None, effective=None):
 	out = [
 		f'# ACH Diffraction Analysis Suite -- {tool} plot style for {who}.',
 		'#',
-		f'# Read by {tool} only. The other plotter has style sheets of its own.',
+		f'# Read by {tool} only. The other plotters have style sheets of their own.',
 		'#',
 		'# Every setting is listed below at the value currently in effect, and every',
 		'# line is commented out. Uncomment one and edit it to take that setting over;',

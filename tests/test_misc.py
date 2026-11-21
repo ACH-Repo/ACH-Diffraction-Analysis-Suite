@@ -433,6 +433,32 @@ check('the plot is labelled with the quantity, and holds no text by default',
       (r'$Q$ / Å$^{-1}$', []))
 plt.close(_fig)
 
+# Style sheets: the heat map is a plotter like pp and pq, with sheets of its own.
+from achdiff import styles  # noqa: E402
+check('heatmap has style sheets of its own', 'heatmap' in styles.TOOLS, True)
+_tpl = styles.template('heatmap')
+check('...whose template lists every setting at the built-in value',
+      ("# tick_direction = 'out'" in _tpl, '# tick_label_size = 8' in _tpl,
+       "# colormap = 'PuBu:0.28'" in _tpl), (True, True, True))
+check('...and the keys pp and pq have are spelled the same here',
+      all(k in styles.BY_NAME['heatmap'] for k in (
+	      'figsize', 'dpi', 'extension', 'tick_direction', 'tick_label_size', 'axis_label_size',
+	      'ticks_top', 'tick_length_major', 'tick_length_minor', 'x_tick_step')), True)
+check('every key drives a setting the heat map has',
+      [k.target for k in styles.BY_NAME['heatmap'].values() if k.target not in heatmap.settings], [])
+_sheet = Path(tempfile.mkdtemp()) / 'inside.toml'
+_sheet.write_text("[axes]\ntick_direction = 'in'\ntick_label_size = 6\naxis_label_size = 7\n"
+                  "ticks_right = true\nobserved_color = 'red'\n", encoding='utf-8')
+_look = dict(heatmap.settings)
+_applied, _text_s = quiet(kit.apply_style, 'heatmap', _look, explicit=str(_sheet))
+_rc = heatmap.rc_params(_look)
+check('a sheet turns the ticks in, shrinks numbers and labels, mirrors the ticks',
+      (_rc['xtick.direction'], _rc['ytick.labelsize'], _rc['axes.labelsize'], _rc['ytick.right']),
+      ('in', 6.0, 7.0, True))
+check("...says it was used, and that a pp setting in it is pp's",
+      ('[*] Style:' in _text_s, 'only pp has' in _text_s), (True, True))
+check('...and leaves the built-in look as it was', heatmap.settings['tick_direction'], 'out')
+
 _x1 = np.linspace(1, 10, 91)
 _x2 = np.linspace(2, 12, 51)
 _tt, _Z = heatmap.common_grid([(_x1, _x1 * 2), (_x2, _x2 * 2)])
@@ -607,6 +633,28 @@ finally:
 	builtins.input = _real_input
 	kit.interactive = _real_interactive
 check('with arguments it asks nothing', (_code, (_w5 / 'straight.svg').is_file()), (0, True))
+
+# A style sheet in a whole run: format, colours and size, and flags still win.
+_sheet2 = Path(tempfile.mkdtemp()) / 'small-png.toml'
+_sheet2.write_text("extension = 'png'\ncolormap = 'viridis'\nfigsize = [3.0, 1.0]\ndpi = 100\n",
+                   encoding='utf-8')
+os.chdir(_w5)
+try:
+	_code, _text = quiet(heatmap.main, ['-s', '--style', str(_sheet2), '--name', 'styled'],
+	                     command=['heatmap'])
+	_code2, _ = quiet(heatmap.main, ['-s', '--style', str(_sheet2), '--size', '4', '1', '--name',
+	                                 'sized'], command=['heatmap'])
+	_code3, _text3 = quiet(heatmap.main, ['-s', '--style', 'nosuchstyle'], command=['heatmap'])
+finally:
+	os.chdir(_cwd)
+check('a sheet sets the format, colours and size of a run',
+      (_code, 'Colours viridis' in _text, (_w5 / 'styled.png').is_file()
+       and plt.imread(str(_w5 / 'styled.png')).shape[:2]), (0, True, (100, 300)))
+check('...and a flag still overrides it for one plot',
+      (_code2, (_w5 / 'sized.png').is_file() and plt.imread(str(_w5 / 'sized.png')).shape[:2]),
+      (0, (100, 400)))
+check('a --style that is not there stops the run, saying where it looked',
+      (_code3, 'Style file not found' in _text3), (2, True))
 
 # A copy runs on its own: it needs only the kit.
 _w6 = write_series(tempfile.mkdtemp(), [1, 100, 200])

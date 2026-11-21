@@ -185,7 +185,9 @@ or for testing against a throwaway config).
 Every group has house rules for a figure — what the y axis is called, whether
 the legend says "Reflections" or "Bragg reflections", whether the R-factor sits
 in the plot or in the caption. `pp` and `pq` read those from a style sheet of
-your own, picked by the same `-u` that picks your CIF library.
+your own, picked by the same `-u` that picks your CIF library — and so does the
+[`heatmap`](#heatmap--a-pattern-series-as-a-heat-map) misc script, with sheets
+of its own (`achdiff style init heatmap`).
 
 Each plotter has its own sheets. A Pawley fit and a stack of patterns are
 different figures, and a column-width `pp` sheet has no business shrinking every
@@ -246,8 +248,9 @@ for `pp`. The first run after upgrading moves them into `styles\pp\` and says so
 --style FILE  >  ACH_STYLE_PP  >  styles/pp/<ID>.toml  >  styles/pp/default.toml  >  built-in
 ```
 
-and the same for `pq` with `ACH_STYLE_PQ` and `styles/pq/`. The older
-`ACH_STYLE` still works, and still means `pp`.
+and the same for `pq` with `ACH_STYLE_PQ` and `styles/pq/`, and for `heatmap`
+with `ACH_STYLE_HEATMAP` and `styles/heatmap/`. The older `ACH_STYLE` still
+works, and still means `pp`.
 
 `styles/pp/default.toml` sets a whole machine's `pp` look for everyone without
 one of their own. `--style` layers a one-off on top without editing yours:
@@ -851,6 +854,35 @@ achdiff misc run heatmap -i *.xy --x-data q -s              # Q data, in 1/angst
   else. `--range` is in the units of the axis.
 - **Nothing is written inside the plot** unless `--label "Mg$_2$(dobdc)"` asks
   for it, in the top right corner as in the paper.
+- **Your own look** — ticks, fonts, sizes, the default colours — goes in a
+  heatmap style sheet, as for [`pp` and `pq`](#your-own-plot-style):
+
+  ```bash
+  achdiff style init heatmap -u CN      # every setting, commented out, explained
+  achdiff style edit heatmap -u CN
+  ```
+
+  ```toml
+  [axes]
+  tick_direction  = 'in'      # in, out or inout
+  tick_label_size = 6         # points
+  axis_label_size = 7
+  ticks_top       = true      # mirror the ticks onto the top and right edges
+  ticks_right     = true
+
+  [figure]
+  font    = 'Helvetica'
+  figsize = [3.3, 1.3]
+  ```
+
+  The keys `pp` and `pq` have (`tick_direction`, `tick_label_size`,
+  `axis_label_size`, `ticks_top`, `x_tick_step`, `figsize`, `dpi`, …) are spelled
+  the same; the heat map adds `ticks_right`, `tick_width`, `frame_width`,
+  `minor_ticks`, `font`, `label_size`, and in `[colours]` its default
+  `colormap`, `intensity_scale` and `colorbar` and the colours of a missing step.
+  `--style FILE` layers a one-off sheet on top; `--size`, `--dpi`, `-x`,
+  `--cmap`, `--scale` and `--colorbar` still win for one plot. The axis label
+  *texts* follow the data and change with `--x-label` and `--y-label`.
 
 - **Stacked, not interpolated.** A series measured in regular steps (1, 100,
   200 … bar) gets one band per step: each pattern covers half a step either side

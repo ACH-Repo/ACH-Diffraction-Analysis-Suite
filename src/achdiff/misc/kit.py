@@ -46,6 +46,11 @@ Running
     add_common_arguments(parser)   -s, -x and -d, as every tool spells them
     main(parser, fill, run, ...)   the shape of every script's main()
     SUITE_VERSION                  the installed suite's version, e.g. '0.18.0'
+
+Style sheets (for a script registered as a plotter in achdiff/styles.py)
+    add_style_arguments(parser)    -u and --style, as pp and pq spell them
+    apply_style(tool, settings, user, explicit)
+                                   the person's sheets layered onto settings
 """
 
 import os
@@ -55,6 +60,8 @@ from pathlib import Path
 
 from achdiff import __version__ as _version
 from achdiff import document
+from achdiff import identity as _identity
+from achdiff import styles as _styles
 from achdiff.core import readers as _readers
 from achdiff.core import topas as _topas
 from achdiff.core import xaxis as _xaxis
@@ -241,13 +248,45 @@ def choose(labels, prompt, default=(), show=True, at_least=1):
 
 # --------------------------------------------------------------------- running
 
-def add_common_arguments(parser):
-	"""-s, -x and -d, meaning what they mean in every tool of the suite."""
+def add_common_arguments(parser, extension='svg'):
+	"""-s, -x and -d, meaning what they mean in every tool of the suite.
+
+	`extension` is -x's default. A script with a style sheet passes None, so the
+	sheet's format holds unless -x is typed, as in pp and pq."""
 	parser.add_argument('-s', '--silent', action='store_true',
 	                    help='Save the output instead of opening a window.')
-	parser.add_argument('-x', '--extension', default='svg',
-	                    help='Image format used with -s (default: %(default)s).')
+	parser.add_argument('-x', '--extension', default=extension,
+	                    help='Image format used with -s (default: '
+	                         + (extension or "the style sheet's, else svg") + ').')
 	document.add_document_argument(parser)
+
+
+def add_style_arguments(parser):
+	"""-u and --style, as pp and pq spell them, for a script with style sheets."""
+	parser.add_argument('-u', '--user', default=None, metavar='ID',
+	                    help='Person ID whose style sheet to use (e.g. CN). Defaults to '
+	                         'ACH_USER, else the registered profile the files here match.')
+	parser.add_argument('--style', default=None, metavar='FILE',
+	                    help='A style sheet to layer on top of yours for this plot: a path, '
+	                         'or a bare name from the styles directory.')
+
+
+def apply_style(tool, settings, user=None, explicit=None):
+	"""Layer the person's style sheets for `tool` onto `settings`, in place, and
+	say which were used -- exactly as pp and pq do:
+
+	    --style FILE > ACH_STYLE_<TOOL> > styles/<tool>/<ID>.toml > styles/<tool>/default.toml
+
+	`tool` must be registered in achdiff/styles.py, which holds the keys a sheet
+	may set. Returns the description of what was applied, or None. Raises
+	FileNotFoundError for a --style file that is not there."""
+	resolved, source = _identity.resolve(user)
+	if user or resolved:
+		print(_identity.describe(resolved, source))
+	applied = _styles.apply(tool, settings, user=resolved, explicit=explicit)
+	if applied:
+		print(f'[*] Style: {applied}')
+	return applied
 
 
 def _shown(arg):

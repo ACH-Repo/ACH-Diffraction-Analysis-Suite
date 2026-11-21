@@ -72,11 +72,74 @@ from achdiff.misc import kit
 DEFAULT_CMAP = 'PuBu:0.28'
 #: A journal column wide; the plot inside comes out about 4:1, as in the paper.
 DEFAULT_SIZE = (3.5, 1.2)
-#: Steps without a pattern: hatched in grey on lighter grey, whatever the colormap.
-#: The fill is what shows when the band is too thin for the hatching -- a single
-#: missing step is a few pixels tall.
-GAP_COLOUR = '0.55'
-GAP_FILL = '0.9'
+
+# The look, as a heatmap style sheet can change it (`achdiff style init heatmap`;
+# the keys are in achdiff/styles.py). Named as in pp and pq wherever the meaning
+# is the same; the values are the heat map's own and reproduce the paper.
+settings = {
+	'figsize': DEFAULT_SIZE,
+	'dpi': 300,
+	'transparent': False,
+	'extension': 'svg',
+	# Arial where it is installed (every lab PC), as in the paper; mathtext in the
+	# same face, so the italic p of "p / bar" matches the rest.
+	'font': 'Arial',
+	'size_axis_labels': 8,
+	'size_tick_labels': 8,
+	'x_tick_step': 0,              # 0: matplotlib chooses
+	'ticks_top': False,
+	'ticks_right': False,
+	'tick_direction': 'out',
+	'tick_length_major': 3.5,
+	'tick_length_minor': 2.0,
+	'tick_width': 0.8,
+	'minor_ticks': True,
+	'frame_width': 0.8,
+	'colormap': DEFAULT_CMAP,
+	'intensity_scale': 'sqrt',
+	'colorbar': False,
+	# Steps without a pattern: hatched in grey on lighter grey, whatever the
+	# colormap. The fill is what shows when a band is too thin for the hatching --
+	# a single missing step is a few pixels tall.
+	'gap_color': '0.55',
+	'gap_fill': '0.9',
+	'label_size': 8,
+}
+
+
+def rc_params(look):
+	"""The matplotlib settings a look (settings, with any style sheet applied)
+	stands for."""
+	fonts = [look['font']] + [f for f in ('Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans')
+	                          if f != look['font']]
+	return {
+		'font.family': 'sans-serif',
+		'font.sans-serif': fonts,
+		'mathtext.fontset': 'custom',
+		'mathtext.rm': 'sans',
+		'mathtext.it': 'sans:italic',
+		'mathtext.bf': 'sans:bold',
+		'font.size': look['size_tick_labels'],
+		'axes.labelsize': look['size_axis_labels'],
+		'xtick.labelsize': look['size_tick_labels'],
+		'ytick.labelsize': look['size_tick_labels'],
+		'axes.linewidth': look['frame_width'],
+		'xtick.direction': look['tick_direction'],
+		'ytick.direction': look['tick_direction'],
+		'xtick.top': look['ticks_top'],
+		'ytick.right': look['ticks_right'],
+		'xtick.major.size': look['tick_length_major'],
+		'ytick.major.size': look['tick_length_major'],
+		'xtick.minor.size': look['tick_length_minor'],
+		'ytick.minor.size': look['tick_length_minor'],
+		'xtick.major.width': look['tick_width'],
+		'ytick.major.width': look['tick_width'],
+		'xtick.minor.width': 0.75 * look['tick_width'],
+		'ytick.minor.width': 0.75 * look['tick_width'],
+		'hatch.linewidth': 0.5,
+		'hatch.color': look['gap_color'],
+		'savefig.transparent': look['transparent'],
+	}
 
 PRESSURE_UNITS = ('bar', 'kbar', 'mbar', 'Pa', 'kPa', 'MPa', 'GPa')
 TEMPERATURE_UNITS = ('K', '°C')
@@ -87,30 +150,8 @@ _UNIT_NUMBER = re.compile(r'(?<![\d.,])(\d+(?:[.,]\d+)?)\s*'
 # .txt and .csv are as often notes and tables as patterns.
 _AMBIGUOUS_TYPES = ('.txt', '.csv')
 
-# Arial where it is installed (every lab PC), as in the paper; mathtext in the
-# same face, so the italic p of "p / bar" matches the rest.
-STYLE = {
-	'font.family': 'sans-serif',
-	'font.sans-serif': ['Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans'],
-	'mathtext.fontset': 'custom',
-	'mathtext.rm': 'sans',
-	'mathtext.it': 'sans:italic',
-	'mathtext.bf': 'sans:bold',
-	'font.size': 8,
-	'axes.linewidth': 0.8,
-	'xtick.direction': 'out',
-	'ytick.direction': 'out',
-	'xtick.major.size': 3.5,
-	'ytick.major.size': 3.5,
-	'xtick.minor.size': 2.0,
-	'ytick.minor.size': 2.0,
-	'xtick.major.width': 0.8,
-	'ytick.major.width': 0.8,
-	'xtick.minor.width': 0.6,
-	'ytick.minor.width': 0.6,
-	'hatch.linewidth': 0.5,
-	'hatch.color': GAP_COLOUR,
-}
+#: The built-in look as matplotlib settings.
+STYLE = rc_params(settings)
 
 #: The patterns with what the names say about them. `paths` and `values` are in
 #: measurement order; `order_numbers` are the numbers the order was read from,
@@ -202,16 +243,19 @@ def build_parser():
 	                help='The x range to show, in the units of the axis. Default: all of it, '
 	                     'less any columns at the ends that are zero in every pattern.')
 
-	look = parser.add_argument_group('the figure')
-	look.add_argument('--cmap', default=DEFAULT_CMAP, metavar='SPEC',
+	look = parser.add_argument_group(
+		'the figure', 'Ticks, fonts, sizes and the default colours come from your heatmap '
+		              'style sheet: `achdiff style init heatmap` writes one listing every '
+		              'setting. These flags override it for one plot.')
+	look.add_argument('--cmap', default=None, metavar='SPEC',
 	                  help='A matplotlib colormap, part of one (NAME:LOW:HIGH, 0 to 1), or '
-	                       'colours to blend (white,#08306b) (default: %(default)s, the '
-	                       "paper's).")
-	look.add_argument('--scale', choices=('linear', 'sqrt', 'log'), default='sqrt',
-	                  help='How intensity maps to colour (default: %(default)s, which puts a '
-	                       "gas-cell pattern's background where the paper's sits). linear "
-	                       'makes colour proportional to intensity; log brings up the weakest '
-	                       'peaks.')
+	                       'colours to blend (white,#08306b). Default: the style sheet\'s, '
+	                       f"else {DEFAULT_CMAP}, the paper's.")
+	look.add_argument('--scale', choices=('linear', 'sqrt', 'log'), default=None,
+	                  help="How intensity maps to colour. Default: the style sheet's, else sqrt, "
+	                       "which puts a gas-cell pattern's background where the paper's sits. "
+	                       'linear makes colour proportional to intensity; log brings up the '
+	                       'weakest peaks.')
 	look.add_argument('--limits', nargs=2, type=float, default=None, metavar=('LOW', 'HIGH'),
 	                  help='The intensities at the two ends of the colour scale. Default: the '
 	                       'lowest and highest shown.')
@@ -222,15 +266,17 @@ def build_parser():
 	                  help='Text in the top right corner, e.g. "Mg$_2$(dobdc)".')
 	look.add_argument('--colorbar', action='store_true',
 	                  help='Add a colour bar (the paper has none).')
-	look.add_argument('--size', nargs=2, type=float, default=DEFAULT_SIZE, metavar=('W', 'H'),
-	                  help='Figure size in inches (default: %(default)s).')
-	look.add_argument('--dpi', type=int, default=300,
-	                  help='Resolution of the saved image, and of the map inside an SVG or PDF '
-	                       '(default: %(default)s).')
+	look.add_argument('--size', nargs=2, type=float, default=None, metavar=('W', 'H'),
+	                  help="Figure size in inches. Default: the style sheet's, else "
+	                       f'{DEFAULT_SIZE[0]:g} {DEFAULT_SIZE[1]:g}.')
+	look.add_argument('--dpi', type=int, default=None,
+	                  help='Resolution of the saved image, and of the map inside an SVG or PDF. '
+	                       "Default: the style sheet's, else 300.")
 	look.add_argument('--name', default='heatmap',
 	                  help='File name stem for -s output: NAME.svg and NAME_SI.txt (default: '
 	                       '%(default)s).')
-	kit.add_common_arguments(parser)
+	kit.add_style_arguments(parser)
+	kit.add_common_arguments(parser, extension=None)
 	return parser
 
 
@@ -781,11 +827,18 @@ def series_ticks(low, high, bottom=None, top=None, nbins=3):
 	return [float(t) for t in ticks], minors
 
 
-def figure(xgrid, Z, steps, low, high, x_label, y_label, cmap, norm, args, dpi=100):
+def figure(xgrid, Z, steps, low, high, x_label, y_label, cmap, norm, args, dpi=100, look=None):
 	"""The heat map, drawn the way the paper's Fig. 2 is: (figure, image shape).
-	Nothing is written inside the plot unless --label asks for it."""
+	Nothing is written inside the plot unless --label asks for it. `look` is the
+	settings with any style sheet applied; draw it inside rc_context(rc_params(look))."""
 	import matplotlib.pyplot as plt
-	from matplotlib.ticker import AutoMinorLocator, FixedLocator, FuncFormatter
+	from matplotlib.ticker import (AutoMinorLocator, FixedLocator, FuncFormatter,
+	                               MultipleLocator, NullLocator)
+
+	look = settings if look is None else look
+	# run() has settled these from the style; a direct call may not have.
+	size = tuple(args.size or look['figsize'])
+	scale = args.scale or look['intensity_scale']
 
 	step = (xgrid[-1] - xgrid[0]) / (xgrid.size - 1)
 	window = [xgrid[0], xgrid[-1]]
@@ -796,33 +849,40 @@ def figure(xgrid, Z, steps, low, high, x_label, y_label, cmap, norm, args, dpi=1
 	edges = bands(steps)
 	bottom, top = edges[0][0], edges[-1][1]
 	img = image(Z, steps, bottom, top, smooth=args.smooth)
-	if args.scale == 'log':
+	if scale == 'log':
 		# Zeros would be masked, and masked is how a missing step shows through.
 		img = np.where(np.isnan(img), np.nan, np.maximum(img, norm.vmin))
-	fig, ax = plt.subplots(figsize=tuple(args.size), dpi=dpi, layout='constrained')
+	fig, ax = plt.subplots(figsize=size, dpi=dpi, layout='constrained')
 	for (lo, hi), s in zip(edges, steps):
 		if s.kind == 'missing':
-			ax.axhspan(lo, hi, facecolor=GAP_FILL, edgecolor=GAP_COLOUR, hatch='////',
-			           linewidth=0, zorder=0.5)
+			ax.axhspan(lo, hi, facecolor=look['gap_fill'], edgecolor=look['gap_color'],
+			           hatch='////', linewidth=0, zorder=0.5)
 	shown = ax.imshow(img, cmap=cmap, norm=norm, zorder=1,
 	                  extent=(xgrid[0] - step / 2, xgrid[-1] + step / 2, bottom, top),
 	                  origin='lower', aspect='auto', interpolation='antialiased')
 	ax.set_xlim(*window)
 	ax.set_ylim(bottom, top)
 
-	ticks, minors = series_ticks(low, high, bottom, top, nbins=3 if args.size[1] <= 2 else 6)
+	ticks, minors = series_ticks(low, high, bottom, top, nbins=3 if size[1] <= 2 else 6)
 	ax.yaxis.set_major_locator(FixedLocator(ticks))
 	ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _pos: f'{v:g}'))
-	ax.yaxis.set_minor_locator(FixedLocator(minors))
-	ax.xaxis.set_minor_locator(AutoMinorLocator())
+	if look['x_tick_step'] > 0:
+		ax.xaxis.set_major_locator(MultipleLocator(look['x_tick_step']))
+	if look['minor_ticks']:
+		ax.yaxis.set_minor_locator(FixedLocator(minors))
+		ax.xaxis.set_minor_locator(AutoMinorLocator())
+	else:
+		ax.yaxis.set_minor_locator(NullLocator())
+		ax.xaxis.set_minor_locator(NullLocator())
 	ax.set_xlabel(x_label)
 	ax.set_ylabel(y_label)
 	if args.label:
-		ax.text(0.985, 0.93, args.label, transform=ax.transAxes, ha='right', va='top', zorder=3)
+		ax.text(0.985, 0.93, args.label, transform=ax.transAxes, ha='right', va='top', zorder=3,
+		        fontsize=look['label_size'])
 	if args.colorbar:
 		bar = fig.colorbar(shown, ax=ax, pad=0.02, aspect=12)
 		bar.set_label('normalised intensity' if args.normalize else 'intensity')
-		bar.ax.tick_params(direction='out')
+		bar.ax.tick_params(direction=look['tick_direction'])
 	return fig, img.shape
 
 
@@ -1149,6 +1209,20 @@ def fill(args, parser):
 # --------------------------------------------------------------------- running
 
 def run(args):
+	# The look: built in, then the person's style sheets, then this command's flags.
+	look = dict(settings)
+	try:
+		kit.apply_style('heatmap', look, user=args.user, explicit=args.style)
+	except FileNotFoundError as e:
+		print(f'[!] {e}')
+		return 2
+	args.size = tuple(args.size or look['figsize'])
+	args.dpi = args.dpi or look['dpi']
+	args.extension = args.extension or look['extension']
+	args.cmap = args.cmap or look['colormap']
+	args.scale = args.scale or look['intensity_scale']
+	args.colorbar = args.colorbar or look['colorbar']
+
 	try:
 		cmap = colormap(args.cmap)
 	except ValueError as e:
@@ -1258,11 +1332,11 @@ def run(args):
 		print('[*] The series axis has no label: give it one with --y-label "$p$ / MPa".')
 
 	import matplotlib.pyplot as plt
-	with plt.rc_context(STYLE):
+	with plt.rc_context(rc_params(look)):
 		# On screen, drawn large enough to read; the saved file is --size at --dpi.
 		fig, shape = figure(xgrid, Z, steps, low, high, args.x_label or axis.label, ser.label,
 		                    cmap, norm, args,
-		                    dpi=100 if args.silent else max(100, 900 / args.size[0]))
+		                    dpi=100 if args.silent else max(100, 900 / args.size[0]), look=look)
 		if not args.silent:
 			plt.show()
 			print('    (-s saves the figure, and NAME_SI.txt with how it was made.)')

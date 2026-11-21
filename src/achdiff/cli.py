@@ -987,19 +987,20 @@ def _build_parser():
 	                     help='Drop from [defaults] rather than from a person.')
 	p_unset.set_defaults(func=cmd_profile_unset)
 
-	st = sub.add_parser('style', help='Your own plot style for pp and pq.',
+	st = sub.add_parser('style', help='Your own plot style for pp, pq and heatmap.',
 	                    description='Style sheets are TOML files kept beside config.toml, '
 	                                'one per person and per plotter, and are never touched '
-	                                'by an upgrade. A pp sheet never affects pq, nor the '
+	                                'by an upgrade. A pp sheet never affects pq, nor any '
 	                                'other way round. Precedence, for pp: --style FILE > '
 	                                'ACH_STYLE_PP > styles/pp/<ID>.toml > '
-	                                'styles/pp/default.toml > built-in; likewise for pq.')
+	                                'styles/pp/default.toml > built-in; likewise for pq '
+	                                'and for `achdiff misc run heatmap`.')
 	st_sub = st.add_subparsers(dest='action', required=True)
 
 	def _with_style_user(p):
 		# TOOL comes first, so `style install pq FILE` reads in the order typed.
 		p.add_argument('tool', choices=sorted(styles.TOOLS),
-		               help='The plotter whose style sheet this is: pp or pq.')
+		               help='The plotter whose style sheet this is: pp, pq or heatmap.')
 		p.add_argument('-u', '--user', default=None, metavar='ID',
 		               help='Whose style to act on. Without it, the shared '
 		                    'default.toml that applies to everyone.')
@@ -1007,7 +1008,7 @@ def _build_parser():
 
 	s_ls = st_sub.add_parser('list', help='Show the style sheets on this machine.')
 	s_ls.add_argument('tool', nargs='?', choices=sorted(styles.TOOLS),
-	                  help="Only this plotter's sheets: pp or pq. Default: both.")
+	                  help="Only this plotter's sheets: pp, pq or heatmap. Default: all.")
 	s_ls.set_defaults(func=cmd_style_list)
 
 	s_path = _with_style_user(st_sub.add_parser('path', help='Print a style file path.'))
